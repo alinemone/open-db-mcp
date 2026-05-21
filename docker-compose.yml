@@ -1,0 +1,11 @@
+services:
+  mcp:
+    build: .
+    image: open-db-mcp:latest
+    container_name: open-db-mcp
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PORT:-3000}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

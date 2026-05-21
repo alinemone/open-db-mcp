@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+bin/
+*.test
+*.out
+docker-compose*.yml
+Dockerfile
+README.md
+CONTRIBUTING.md
+LICENSE
+docs/
