@@ -1,44 +1,65 @@
+<!-- SEO description -->
+<!-- open-db-mcp is a self-hostable Model Context Protocol (MCP) server in Go.
+     It lets LLMs (Claude, GPT, Gemini, …) query PostgreSQL, MySQL, ClickHouse,
+     MongoDB, Redis, SQLite, and Elasticsearch through a single Docker
+     container, configured entirely via .env. -->
+
 # open-db-mcp
 
-> One MCP server, any database, zero config. Add a `*_HOST=…` line to your env, restart, done.
+🌐 **[فارسی (Persian)](./README.fa.md)** · English
 
-`open-db-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server, written in Go, that exposes any database you configure through environment variables. Drop it into Docker Compose with your `.env`, point Claude / Codex / Gemini / Cursor at it, and the LLM can immediately list schemas, inspect tables, sample rows, and run read-only SQL across every source.
+> One MCP server for every database. Drop your `.env`, run `docker compose up`, and any LLM — Claude, Codex, Gemini, Cursor, Windsurf — can read your PostgreSQL, MySQL, ClickHouse, MongoDB, Redis, SQLite, and Elasticsearch.
 
-It is opinionated about three things:
 
-1. **No code change to add a database.** Discovery is driven by env prefixes (`PG_`, `MYSQL_`, `CH_`, `MONGO_`, `REDIS_`, `SQLITE_`, `ES_`). Add a block to `.env`, restart, the source shows up in `db_list_sources`.
-2. **One file per database.** Each adapter is a single Go file under `internal/adapters/<name>/<name>.go`. Adding DuckDB / Cassandra / Snowflake / … is a single-file PR — see [CONTRIBUTING.md](./CONTRIBUTING.md).
-3. **Read-only by default.** `db_execute_query` rejects anything that isn't `SELECT` / `WITH` / `EXPLAIN` / `DESCRIBE` / `SHOW`. No `DELETE`-by-accident on production.
+
+`open-db-mcp` is a self-hostable **[Model Context Protocol (MCP)](https://modelcontextprotocol.io)** server, written in **Go**, that turns any database you can reach into a tool an LLM can call. Add one `.env` line per database — no code change required — and Claude/Codex/Gemini/Cursor can immediately list schemas, inspect tables, search columns, sample rows, and run read-only SQL across all of them.
+
+---
+
+## Why open-db-mcp?
+
+- 🔌 **Zero-code add a database** — drop env vars with the right prefix (`PG_`, `MYSQL_`, `CH_`, `MONGO_`, `REDIS_`, `SQLITE_`, `ES_`), restart, done.
+- 🧩 **Plugin-per-database architecture** — one Go file per database family. Adding DuckDB / Snowflake / Cassandra is a single-file PR.
+- 🛡️ **Read-only by default** — `db_execute_query` rejects `INSERT/UPDATE/DELETE/DROP/ALTER` at parse time. Safe to point at production.
+- 🐳 **Single tiny Docker image** — Alpine-based, ~12 MB. Starts in under a second.
+- ⚡ **Streamable HTTP** — works out of the box with **Claude Desktop**, **Claude Code**, **Codex**, **Gemini**, **Cursor**, **Windsurf**, **Zed**, **Continue**, **Cline**, and anything else that speaks MCP HTTP.
+- 🔑 **Per-user API keys** — `MCP_USER_<NAME>=<token>` style. Easy to grep, easy to rotate, easy to audit.
+- 📦 **TOON-encoded results** — compact token-friendly format that lets the LLM see more rows for the same context budget.
+- 🐘🐬🟦🍃🟥🔵🔍 **One server, many databases** — PostgreSQL, MySQL/MariaDB, ClickHouse, MongoDB, Redis, SQLite, Elasticsearch (plus an opt-in CLOG profile for Kubernetes log analysis).
+
+---
 
 ## Supported databases
 
-| Family        | Prefix    | Notes                          |
-|---------------|-----------|--------------------------------|
-| PostgreSQL    | `PG_`     | Full SQL, FKs, indexes         |
-| MySQL/MariaDB | `MYSQL_`  | Full SQL, FKs, indexes         |
-| ClickHouse    | `CH_`     | OLAP, native protocol          |
-| MongoDB       | `MONGO_`  | `mongo_find`, `mongo_aggregate`|
-| Redis         | `REDIS_`  | `redis_keys`, `redis_get`, `redis_info` |
-| SQLite        | `SQLITE_` | Single-file embedded           |
-| Elasticsearch | `ES_`     | `es_search`, `es_field_caps`, plus optional CLOG log-analysis profile |
+| Family                  | Env prefix | Generic SQL tools | Native tools                                    |
+|-------------------------|-----------|-------------------|-------------------------------------------------|
+| **PostgreSQL**          | `PG_`     | ✅ full           | FK discovery, indexes                          |
+| **MySQL / MariaDB**     | `MYSQL_`  | ✅ full           | FK discovery, indexes                          |
+| **ClickHouse**          | `CH_`     | ✅ OLAP-aware     | Table engines, partitions                      |
+| **MongoDB**             | `MONGO_`  | listing only      | `mongo_find`, `mongo_aggregate`                |
+| **Redis**               | `REDIS_`  | —                 | `redis_keys`, `redis_get`, `redis_info`        |
+| **SQLite**              | `SQLITE_` | ✅ full           | embedded; FK PRAGMA                            |
+| **Elasticsearch**       | `ES_`     | indices listing   | `es_list_indices`, `es_field_caps`, `es_search`|
+| **CLOG (k8s logs)**     | `CLOG_*`  | —                 | namespace/container log search                 |
+
+> Want **DuckDB**, **Snowflake**, **BigQuery**, **Cassandra**, **MSSQL**? Open an issue or send a PR — adding a new adapter is one Go file. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+---
 
 ## Quick start
 
 ```bash
-git clone https://github.com/your-org/open-db-mcp.git
+git clone https://github.com/alinemone/open-db-mcp.git
 cd open-db-mcp
-cp .env.example .env       # then edit .env to point at your databases
+cp .env.example .env             # fill in PG_*, MYSQL_*, … to point at your DBs
 docker compose up -d
 curl http://localhost:3000/health
 ```
 
-Wire it into your MCP client — Claude Desktop, Claude Code, Codex, Gemini, Cursor, Windsurf, Continue, Zed:
-
-> 📖 **Full client setup guide:** [docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)
-
-Quick example for Claude Desktop (`claude_desktop_config.json`):
+Wire it into your MCP client:
 
 ```jsonc
+// Claude Desktop / Codex / Gemini / Cursor / Windsurf / Continue / Zed
 {
   "mcpServers": {
     "open-db": {
@@ -48,73 +69,98 @@ Quick example for Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-Then ask the model: *"list every source you can see"* → it will call `db_list_sources` and report back.
+Then ask the model: *“list every database I have, then show the 5 biggest tables in each”.* It will chain `db_list_sources` → `db_list_tables` → `db_table_card` for you.
 
-## Configuration
+> 📖 Full client setup guide: [docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)
 
-The only required env vars are `MCP_API_KEYS` and at least one source block. Everything else has sane defaults. See [`.env.example`](./.env.example) for the full menu.
+---
 
-| Var              | Default       | What it does                          |
-|------------------|---------------|---------------------------------------|
-| `PORT`           | `3000`        | HTTP listener                         |
-| `MCP_USER_<NAME>` | *(required)* | One line per user: `MCP_USER_ALI=token`. Legacy `MCP_API_KEYS=k1:r1,k2:r2` also works. |
-| `LOG_LEVEL`      | `info`        | `debug` / `info` / `warn` / `error`   |
-| `TZ`             | `UTC`         | Timezone for log timestamps           |
-| `CLOG_ES_SOURCE` | *(unset)*     | Set to an `ES_<NAME>` to enable `clog_*` log-analysis tools |
+## Adding multiple databases of the same kind
 
-## Available tools
+Want 3 Postgres clusters, 2 MySQL hosts, and a ClickHouse?
 
-**Generic (work with any SQL-like source):**
+```env
+PG_MAIN_HOST=10.0.0.1       PG_ANALYTICS_HOST=10.0.0.2   PG_BILLING_HOST=10.0.0.3
+PG_MAIN_USER=postgres       PG_ANALYTICS_USER=postgres   PG_BILLING_USER=postgres
+PG_MAIN_PASS=...            PG_ANALYTICS_PASS=...        PG_BILLING_PASS=...
+PG_MAIN_DB=app              PG_ANALYTICS_DB=warehouse    PG_BILLING_DB=billing
 
-- `db_list_sources` — every configured source
-- `db_list_schemas`, `db_list_tables`, `db_list_columns`
-- `db_table_card` / `db_table_card_full` — stats, sample rows, FKs
-- `db_find_relationships` — PK/FK edges (relational sources only)
-- `db_execute_query` — read-only SQL, returns TOON-encoded results
-- `search_tables` — fuzzy search across every indexed table/column
+MYSQL_CRM_HOST=10.0.0.4     MYSQL_LEGACY_HOST=10.0.0.5
+CH_OLAP_HOST=10.0.0.6
+```
+
+`db_list_sources` will then return all six, and the LLM can address them by name.
+
+---
+
+## Available MCP tools
+
+**Generic (any SQL-like source):**
+
+- `db_list_sources` · `db_list_schemas` · `db_list_tables` · `db_list_columns`
+- `db_table_card` · `db_table_card_full` (columns + stats + sample rows + indexes + FKs)
+- `db_find_relationships` (PK/FK edges)
+- `db_execute_query` (read-only, TOON-encoded results)
+- `search_tables` (fuzzy table/column search across every source)
 
 **Per-database:**
 
-- MongoDB: `mongo_list_collections`, `mongo_find`, `mongo_aggregate`
-- Redis: `redis_keys`, `redis_get`, `redis_info`
-- Elasticsearch: `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
-- CLOG (opt-in): `clog_profile`, `clog_container_logs`
+- MongoDB — `mongo_list_collections`, `mongo_find`, `mongo_aggregate`
+- Redis — `redis_keys`, `redis_get`, `redis_info`
+- Elasticsearch — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
+- CLOG (opt-in) — `clog_profile`, `clog_container_logs`
+
+---
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────┐
-│ HTTP /mcp  (Streamable HTTP, JSON-RPC 2.0)     │
-│ + Auth: Bearer / X-Api-Key / ?api_key=         │
-└────────────────────┬───────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│ HTTP /mcp  (Streamable HTTP, JSON-RPC 2.0)       │
+│ + Auth: Bearer | X-Api-Key | ?api_key=           │
+└────────────────────┬─────────────────────────────┘
                      │
               ┌──────▼──────┐
-              │   Tools     │   ← db_*, es_*, clog_*, mongo_*, redis_*
+              │ Tool router │ db_*, es_*, clog_*, mongo_*, redis_*
               └──────┬──────┘
-                     │ Adapter interface
+                     │  adapters.Adapter interface
    ┌─────────────────┼─────────────────────────┐
    ▼     ▼     ▼     ▼     ▼     ▼     ▼
  [pg] [mysql] [ch] [mongo] [redis] [sqlite] [es]
-        (one file each, env-discovered)
+        (one Go file each, env-discovered)
 ```
 
-## Why TOON?
+Each `internal/adapters/<dbname>/<dbname>.go` is self-contained: discovery, connection pool, schema introspection, query execution. Adding a new family means adding one file and one blank import.
 
-The default response format is [TOON](https://github.com/toon-format/toon) — a tabular text format that uses fewer tokens than JSON. It looks like:
+---
 
-```
-Tables[3]{table,kind}:
-orders,table
-users,table
-user_summary,view
-```
+## Comparisons
 
-LLMs read it fine and your context budget thanks you.
+|                                  | open-db-mcp | manual `psql`-MCP scripts | Single-DB MCP servers (e.g. `postgres-mcp`) |
+|----------------------------------|:-----------:|:-------------------------:|:-------------------------------------------:|
+| Multiple databases per server    | ✅           | ❌                         | ❌                                           |
+| Add a DB without code change     | ✅           | ❌                         | ❌                                           |
+| Read-only enforced               | ✅           | varies                    | varies                                      |
+| TOON token-efficient output      | ✅           | ❌                         | varies                                      |
+| Per-user API keys                | ✅           | ❌                         | ❌                                           |
+| Single Docker container          | ✅           | n/a                       | ✅ (one per DB)                              |
 
-## Adding a new database
+---
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). The short version: one file under `internal/adapters/<dbname>/`, implement `adapters.Adapter`, add a blank import to `cmd/server/main.go`, PR.
+## Documentation
+
+- **[docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)** — setup recipes for every popular MCP client
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — how to add a new database adapter (one file, ~150 LOC)
+- **[.env.example](./.env.example)** — full env-var reference with comments
+
+---
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](./LICENSE). Contributions welcome.
+
+---
+
+## Keywords
+
+> MCP server · Model Context Protocol · LLM database tools · Claude MCP · Claude Code · Codex MCP · Gemini CLI MCP · Cursor MCP · Windsurf MCP · Continue MCP · PostgreSQL MCP · MySQL MCP · ClickHouse MCP · MongoDB MCP · Redis MCP · SQLite MCP · Elasticsearch MCP · self-hosted MCP · open source MCP · Docker MCP · AI database access · LLM SQL · agentic SQL · LLM data platform · TOON format
