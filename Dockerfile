@@ -1,3 +1,6 @@
+# syntax=docker/dockerfile:1.7
+
+# --- Build stage ---
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
@@ -10,16 +13,25 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
-      -ldflags="-w -s -X main.version=$(git rev-parse --short HEAD 2>/dev/null || echo dev)" \
+      -ldflags="-w -s" \
       -trimpath \
       -o /open-db-mcp ./cmd/server
 
-FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=builder /open-db-mcp /open-db-mcp
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# --- Runtime stage ---
+# alpine (Docker Hub) is used instead of gcr.io/distroless to avoid GCR
+# blockage in some regions. Result image is ~12 MB.
+FROM alpine:3.20
 
+RUN apk add --no-cache ca-certificates tzdata wget \
+    && addgroup -S app && adduser -S -G app app
+
+COPY --from=builder /open-db-mcp /usr/local/bin/open-db-mcp
+
+USER app
 EXPOSE 3000
-USER nonroot:nonroot
 
-ENTRYPOINT ["/open-db-mcp"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:3000/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/open-db-mcp"]

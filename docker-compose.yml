@@ -5,6 +5,10 @@ services:
     container_name: open-db-mcp
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Always listen on 3000 inside the container; the host-side port is
+      # controlled by ${PORT} below, defaulting to 3000.
+      PORT: "3000"
     ports:
       - "${PORT:-3000}:3000"
     extra_hosts:

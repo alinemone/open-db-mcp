@@ -32,10 +32,13 @@ docker compose up -d
 curl http://localhost:3000/health
 ```
 
-Wire it into your MCP client (token from `MCP_API_KEYS`):
+Wire it into your MCP client — Claude Desktop, Claude Code, Codex, Gemini, Cursor, Windsurf, Continue, Zed:
+
+> 📖 **Full client setup guide:** [docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)
+
+Quick example for Claude Desktop (`claude_desktop_config.json`):
 
 ```jsonc
-// Claude Desktop / Codex / Gemini
 {
   "mcpServers": {
     "open-db": {
