@@ -5,6 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
+
+	"github.com/open-db-mcp/open-db-mcp/internal/auth"
 )
 
 // rpcRequest mirrors a JSON-RPC 2.0 request frame.
@@ -89,11 +92,26 @@ func HTTPHandler(s *Server) http.Handler {
 				writeRPCError(w, req.ID, -32602, "invalid params")
 				return
 			}
+
+			// Audit log: who called which tool on which source, with timing.
+			// Picks `source` out of args when present (db_*, es_*, mongo_*,
+			// redis_* all use this convention).
+			started := time.Now()
+			source, _ := p.Arguments["source"].(string)
+
 			text, err := s.Handle(ctx, p.Name, p.Arguments)
+			dur := time.Since(started)
+
 			if err != nil {
-				// Tool errors are returned as a content block with isError=true
-				// so the LLM can see them, rather than a JSON-RPC error.
-				slog.WarnContext(ctx, "tool error", "tool", p.Name, "err", err)
+				slog.WarnContext(ctx, "tool.call",
+					"user", auth.Role(ctx),
+					"ip", clientIP(r),
+					"tool", p.Name,
+					"source", source,
+					"duration_ms", dur.Milliseconds(),
+					"status", "error",
+					"err", err.Error(),
+				)
 				writeRPCResult(w, req.ID, map[string]any{
 					"content": []map[string]any{{
 						"type": "text", "text": "Error: " + err.Error(),
@@ -102,6 +120,16 @@ func HTTPHandler(s *Server) http.Handler {
 				})
 				return
 			}
+
+			slog.InfoContext(ctx, "tool.call",
+				"user", auth.Role(ctx),
+				"ip", clientIP(r),
+				"tool", p.Name,
+				"source", source,
+				"duration_ms", dur.Milliseconds(),
+				"status", "ok",
+				"bytes", len(text),
+			)
 			writeRPCResult(w, req.ID, map[string]any{
 				"content": []map[string]any{{
 					"type": "text", "text": text,
@@ -132,6 +160,30 @@ func setCORS(w http.ResponseWriter) {
 func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Result: result})
+}
+
+// clientIP returns the best guess for the originating IP, preferring
+// X-Forwarded-For (set by reverse proxies) and falling back to RemoteAddr.
+func clientIP(r *http.Request) string {
+	if h := r.Header.Get("X-Forwarded-For"); h != "" {
+		if i := indexComma(h); i >= 0 {
+			return h[:i]
+		}
+		return h
+	}
+	if h := r.Header.Get("X-Real-Ip"); h != "" {
+		return h
+	}
+	return r.RemoteAddr
+}
+
+func indexComma(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			return i
+		}
+	}
+	return -1
 }
 
 func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
