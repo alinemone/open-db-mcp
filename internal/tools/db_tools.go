@@ -105,6 +105,15 @@ func RegisterDB(s *mcp.Server, d *Deps) {
 		Handler: d.executeQuery,
 	})
 	s.RegisterTool(mcp.Tool{
+		Name:        "db_execute_write",
+		Description: "Execute a mutating SQL statement (INSERT/UPDATE/DELETE/DDL). REQUIRES the source to be explicitly marked writable via PG_<NAME>_WRITE=true (or MYSQL_<NAME>_WRITE=true, etc.). Defaults to off — most sources will refuse this call.",
+		InputSchema: schemaObj(map[string]any{
+			"source": map[string]any{"type": "string"},
+			"query":  map[string]any{"type": "string"},
+		}, "source", "query"),
+		Handler: d.executeWrite,
+	})
+	s.RegisterTool(mcp.Tool{
 		Name:        "search_tables",
 		Description: "Fuzzy search across tables and columns from every configured source.",
 		InputSchema: schemaObj(map[string]any{
@@ -327,6 +336,36 @@ func (d *Deps) executeQuery(ctx context.Context, args map[string]any) (string, e
 		return "", err
 	}
 	return format.ToTOONColumns("Result", res.Columns, res.Rows), nil
+}
+
+// executeWrite is the opt-in mutating counterpart of executeQuery. It refuses
+// to run unless the requested source has been explicitly marked writable in
+// env (e.g. PG_DEV_WRITE=true) — by default every source is read-only.
+func (d *Deps) executeWrite(ctx context.Context, args map[string]any) (string, error) {
+	src, _ := args["source"].(string)
+	q, _ := args["query"].(string)
+	if strings.TrimSpace(q) == "" {
+		return "", fmt.Errorf("query is required")
+	}
+	sr, err := d.findSource(src)
+	if err != nil {
+		return "", err
+	}
+	if sr.Source.Cfg["write"] != "true" {
+		return "", fmt.Errorf(
+			"source %s is read-only; set %s%s_WRITE=true in env to enable db_execute_write",
+			sr.Source.Name, sr.Adapter.EnvPrefix(), sr.Source.Name,
+		)
+	}
+	conn, err := sr.Adapter.Connect(ctx, sr.Source)
+	if err != nil {
+		return "", err
+	}
+	res, err := conn.ExecuteQuery(ctx, adapters.Query{SQL: q, Write: true})
+	if err != nil {
+		return "", err
+	}
+	return format.ToTOONColumns("WriteResult", res.Columns, res.Rows), nil
 }
 
 func (d *Deps) searchTables(_ context.Context, args map[string]any) (string, error) {

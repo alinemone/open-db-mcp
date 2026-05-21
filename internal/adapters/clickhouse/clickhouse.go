@@ -53,6 +53,7 @@ func (a *Adapter) Discover(env map[string]string) ([]adapters.Source, error) {
 				"pass":   cfg["PASS"],
 				"db":     orDefault(cfg["DB"], "default"),
 				"secure": cfg["SECURE"],
+				"write":  cfg["WRITE"], // "true" → db_execute_write allowed
 			},
 		})
 	}
@@ -208,11 +209,27 @@ func (c *conn) FindRelationships(_ context.Context, _, _ string) ([]adapters.Rel
 }
 
 func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.QueryResult, error) {
-	if err := adapters.AssertReadOnly(q.SQL); err != nil {
-		return adapters.QueryResult{}, err
+	if !q.Write {
+		if err := adapters.AssertReadOnly(q.SQL); err != nil {
+			return adapters.QueryResult{}, err
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	if q.Write && !looksLikeSelect(q.SQL) {
+		res, err := c.db.ExecContext(ctx, q.SQL)
+		if err != nil {
+			return adapters.QueryResult{}, err
+		}
+		affected, _ := res.RowsAffected()
+		return adapters.QueryResult{
+			Columns:  []string{"rows_affected"},
+			Rows:     [][]any{{affected}},
+			Affected: affected,
+		}, nil
+	}
+
 	rows, err := c.db.QueryContext(ctx, q.SQL)
 	if err != nil {
 		return adapters.QueryResult{}, err
@@ -235,6 +252,15 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 		data = append(data, vals)
 	}
 	return adapters.QueryResult{Columns: cols, Rows: data}, rows.Err()
+}
+
+func looksLikeSelect(sql string) bool {
+	s := strings.TrimSpace(sql)
+	if s == "" {
+		return false
+	}
+	first := strings.ToUpper(strings.Fields(s)[0])
+	return first == "SELECT" || first == "WITH" || first == "EXPLAIN" || first == "SHOW" || first == "DESCRIBE" || first == "DESC"
 }
 
 func queryToMaps(ctx context.Context, db *sql.DB, q string) ([]map[string]any, error) {

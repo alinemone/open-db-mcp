@@ -65,6 +65,7 @@ func (a *Adapter) Discover(env map[string]string) ([]adapters.Source, error) {
 				"pass":    cfg["PASS"],
 				"db":      db,
 				"sslmode": defaultStr(cfg["SSLMODE"], "prefer"),
+				"write":   cfg["WRITE"], // "true" → db_execute_write allowed
 			},
 		}
 		a.mu.Lock()
@@ -318,17 +319,47 @@ func (c *conn) FindRelationships(ctx context.Context, schema, table string) ([]a
 }
 
 func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.QueryResult, error) {
-	if err := adapters.AssertReadOnly(q.SQL); err != nil {
-		return adapters.QueryResult{}, err
+	if !q.Write {
+		if err := adapters.AssertReadOnly(q.SQL); err != nil {
+			return adapters.QueryResult{}, err
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	mode := pgx.ReadOnly
+	if q.Write {
+		mode = pgx.ReadWrite
+	}
+	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: mode})
 	if err != nil {
 		return adapters.QueryResult{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	// On error or read path we rollback; on a successful write we commit.
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// Writes (INSERT/UPDATE/DELETE/DDL) generally don't return result rows.
+	// Use Exec so we get rows-affected counts back instead of erroring out.
+	if q.Write && !looksLikeSelect(q.SQL) {
+		tag, err := tx.Exec(ctx, q.SQL)
+		if err != nil {
+			return adapters.QueryResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return adapters.QueryResult{}, err
+		}
+		committed = true
+		return adapters.QueryResult{
+			Columns:  []string{"rows_affected"},
+			Rows:     [][]any{{tag.RowsAffected()}},
+			Affected: tag.RowsAffected(),
+		}, nil
+	}
 
 	rows, err := tx.Query(ctx, q.SQL)
 	if err != nil {
@@ -352,7 +383,24 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 	if err := rows.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		return adapters.QueryResult{}, err
 	}
+	if q.Write {
+		if err := tx.Commit(ctx); err != nil {
+			return adapters.QueryResult{}, err
+		}
+		committed = true
+	}
 	return adapters.QueryResult{Columns: cols, Rows: data}, nil
+}
+
+// looksLikeSelect peeks at the first keyword to decide between Exec and Query.
+// We can't rely on AssertReadOnly here because write mode disables it.
+func looksLikeSelect(sql string) bool {
+	s := strings.TrimSpace(sql)
+	if s == "" {
+		return false
+	}
+	first := strings.ToUpper(strings.Fields(s)[0])
+	return first == "SELECT" || first == "WITH" || first == "EXPLAIN" || first == "SHOW" || first == "DESCRIBE" || first == "DESC"
 }
 
 func defaultStr(s, def string) string {

@@ -45,7 +45,10 @@ func (a *Adapter) Discover(env map[string]string) ([]adapters.Source, error) {
 		out = append(out, adapters.Source{
 			Name: name,
 			Kind: a.Kind(),
-			Cfg:  map[string]string{"path": cfg["PATH"]},
+			Cfg: map[string]string{
+				"path":  cfg["PATH"],
+				"write": cfg["WRITE"], // "true" → db_execute_write allowed
+			},
 		})
 	}
 	return out, nil
@@ -59,7 +62,14 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 	}
 	a.mu.Unlock()
 
-	db, err := sql.Open("sqlite", src.Cfg["path"]+"?_pragma=query_only(true)&_pragma=busy_timeout(5000)")
+	// query_only(true) is a hard ceiling: even a malicious caller cannot
+	// mutate. We only drop it when the source has been explicitly opted into
+	// write mode via SQLITE_<NAME>_WRITE=true.
+	dsn := src.Cfg["path"] + "?_pragma=busy_timeout(5000)"
+	if src.Cfg["write"] != "true" {
+		dsn += "&_pragma=query_only(true)"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open %s: %w", src.Name, err)
 	}
@@ -194,11 +204,27 @@ func (c *conn) FindRelationships(ctx context.Context, _, table string) ([]adapte
 }
 
 func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.QueryResult, error) {
-	if err := adapters.AssertReadOnly(q.SQL); err != nil {
-		return adapters.QueryResult{}, err
+	if !q.Write {
+		if err := adapters.AssertReadOnly(q.SQL); err != nil {
+			return adapters.QueryResult{}, err
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+
+	if q.Write && !looksLikeSelect(q.SQL) {
+		res, err := c.db.ExecContext(ctx, q.SQL)
+		if err != nil {
+			return adapters.QueryResult{}, err
+		}
+		affected, _ := res.RowsAffected()
+		return adapters.QueryResult{
+			Columns:  []string{"rows_affected"},
+			Rows:     [][]any{{affected}},
+			Affected: affected,
+		}, nil
+	}
+
 	rows, err := c.db.QueryContext(ctx, q.SQL)
 	if err != nil {
 		return adapters.QueryResult{}, err
@@ -226,6 +252,15 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 		data = append(data, vals)
 	}
 	return adapters.QueryResult{Columns: cols, Rows: data}, rows.Err()
+}
+
+func looksLikeSelect(sql string) bool {
+	s := strings.TrimSpace(sql)
+	if s == "" {
+		return false
+	}
+	first := strings.ToUpper(strings.Fields(s)[0])
+	return first == "SELECT" || first == "WITH" || first == "EXPLAIN" || first == "SHOW" || first == "DESCRIBE" || first == "DESC"
 }
 
 func queryToMaps(ctx context.Context, db *sql.DB, q string) ([]map[string]any, error) {
@@ -270,9 +305,6 @@ func isIdent(s string) bool {
 	}
 	return true
 }
-
-// silence unused import warnings on platforms where strings isn't used elsewhere
-var _ = strings.ToLower
 
 func init() {
 	adapters.Register(New())

@@ -20,7 +20,7 @@
 
 - 🔌 **Zero-code add a database** — drop env vars with the right prefix (`PG_`, `MYSQL_`, `CH_`, `MONGO_`, `REDIS_`, `SQLITE_`, `ES_`), restart, done.
 - 🧩 **Plugin-per-database architecture** — one Go file per database family. Adding DuckDB / Snowflake / Cassandra is a single-file PR.
-- 🛡️ **Read-only by default** — `db_execute_query` rejects `INSERT/UPDATE/DELETE/DROP/ALTER` at parse time. Safe to point at production.
+- 🛡️ **Read-only by default** — `db_execute_query` rejects `INSERT/UPDATE/DELETE/DROP/ALTER` at parse time. Safe to point at production. Writes are gated behind a separate `db_execute_write` tool that only fires for sources you explicitly mark `*_WRITE=true`.
 - 🐳 **Single tiny Docker image** — Alpine-based, ~12 MB. Starts in under a second.
 - ⚡ **Streamable HTTP** — works out of the box with **Claude Desktop**, **Claude Code**, **Codex**, **Gemini**, **Cursor**, **Windsurf**, **Zed**, **Continue**, **Cline**, and anything else that speaks MCP HTTP.
 - 🔑 **Per-user API keys** — `MCP_USER_<NAME>=<token>` style. Easy to grep, easy to rotate, easy to audit.
@@ -101,6 +101,7 @@ CH_OLAP_HOST=10.0.0.6
 - `db_table_card` · `db_table_card_full` (columns + stats + sample rows + indexes + FKs)
 - `db_find_relationships` (PK/FK edges)
 - `db_execute_query` (read-only, TOON-encoded results)
+- `db_execute_write` (opt-in mutating SQL — requires `<DB>_<NAME>_WRITE=true` on the source; defaults off)
 - `search_tables` (fuzzy table/column search across every source)
 
 **Per-database:**
@@ -109,6 +110,34 @@ CH_OLAP_HOST=10.0.0.6
 - Redis — `redis_keys`, `redis_get`, `redis_info`
 - Elasticsearch — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
 - CLOG (opt-in) — `clog_profile`, `clog_container_logs`
+
+---
+
+## Write mode (opt-in, per source)
+
+By default **every source is read-only**. The `db_execute_query` tool rejects any non-`SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` statement at parse time, and where the driver supports it the underlying transaction is also opened read-only (Postgres) or the connection carries a `query_only` PRAGMA (SQLite).
+
+To allow writes on a specific source, set `<PREFIX>_<NAME>_WRITE=true`:
+
+```env
+PG_DEV_HOST=host.docker.internal
+PG_DEV_WRITE=true            # ← only this source becomes writable
+
+MYSQL_LOCAL_WRITE=true       # same idea for MySQL
+CH_PLAYGROUND_WRITE=true     # same for ClickHouse
+SQLITE_SCRATCH_WRITE=true    # drops the query_only PRAGMA on this DB
+```
+
+The new `db_execute_write` tool refuses to run unless the target source has been marked writable:
+
+```
+Error: source PROD is read-only;
+       set PG_PROD_WRITE=true in env to enable db_execute_write
+```
+
+This is enforced uniformly across **PostgreSQL · MySQL · ClickHouse · SQLite**. MongoDB / Redis / Elasticsearch use their own tool families (`mongo_*`, `redis_*`, `es_*`) and don’t flow through `db_execute_*`.
+
+> 💡 In production, prefer leaving `WRITE` off and using a DB user with only `SELECT` grants — that gives you defence in depth.
 
 ---
 

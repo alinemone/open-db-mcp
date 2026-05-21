@@ -22,7 +22,7 @@
 
 - 🔌 **اضافه کردن دیتابیس بدون کدنویسی** — متغیرهای محیطی با prefix درست (`PG_`, `MYSQL_`, `CH_`, `MONGO_`, `REDIS_`, `SQLITE_`, `ES_`) رو بذار، restart کن، تمام.
 - 🧩 **معماری plugin-per-database** — یک فایل Go برای هر خانواده‌ی دیتابیس. اضافه کردن DuckDB / Snowflake / Cassandra یک PR یک‌فایلی است.
-- 🛡️ **فقط-خواندنی به‌صورت پیش‌فرض** — `db_execute_query` در زمان parse، دستورات `INSERT/UPDATE/DELETE/DROP/ALTER` رو رد می‌کنه. می‌تونی به production هم وصلش کنی.
+- 🛡️ **فقط-خواندنی به‌صورت پیش‌فرض** — `db_execute_query` در زمان parse، دستورات `INSERT/UPDATE/DELETE/DROP/ALTER` رو رد می‌کنه. می‌تونی به production هم وصلش کنی. برای write یک ابزار جداگانه به اسم `db_execute_write` هست که فقط روی منابعی کار می‌کنه که صریحاً `*_WRITE=true` دارن.
 - 🐳 **Docker image کوچک** — مبتنی بر Alpine، حدود ۱۲ مگابایت. زیر یک ثانیه بالا میاد.
 - ⚡ **Streamable HTTP** — مستقیم با **Claude Desktop**، **Claude Code**، **Codex**، **Gemini**، **Cursor**، **Windsurf**، **Zed**، **Continue**، **Cline** و هر چیزی که MCP HTTP بفهمه کار می‌کنه.
 - 🔑 **کلید API به ازای هر کاربر** — به سبک `MCP_USER_<NAME>=<token>`. راحت grep می‌شه، راحت rotate می‌شه، راحت audit می‌شه.
@@ -119,6 +119,7 @@ CH_OLAP_HOST=10.0.0.6
 - `db_table_card` · `db_table_card_full` (column ها + آمار + نمونه‌داده + index ها + FK ها)
 - `db_find_relationships` (روابط PK/FK)
 - `db_execute_query` (فقط-خواندنی، خروجی TOON)
+- `db_execute_write` (write اختیاری — فقط روی منابعی که `<DB>_<NAME>_WRITE=true` دارن. پیش‌فرض خاموش)
 - `search_tables` (جستجوی fuzzy روی جدول/ستون‌های همه‌ی منابع)
 
 **اختصاصی هر دیتابیس:**
@@ -127,6 +128,42 @@ CH_OLAP_HOST=10.0.0.6
 - Redis — `redis_keys`, `redis_get`, `redis_info`
 - Elasticsearch — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
 - CLOG (اختیاری) — `clog_profile`, `clog_container_logs`
+
+---
+
+## Write mode (اختیاری، به ازای هر منبع)
+
+به‌صورت پیش‌فرض **همه‌ی منابع فقط-خواندنی هستن**. ابزار `db_execute_query` هر دستوری غیر از `SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` رو در زمان parse رد می‌کنه، و در driver هایی که پشتیبانی می‌کنن، transaction زیرین هم به‌صورت read-only باز می‌شه (Postgres) یا connection با pragma `query_only` ساخته می‌شه (SQLite).
+
+برای فعال‌سازی write روی یک منبع خاص، `<PREFIX>_<NAME>_WRITE=true` رو ست کن:
+
+<div dir="ltr">
+
+```env
+PG_DEV_HOST=host.docker.internal
+PG_DEV_WRITE=true            # ← فقط این منبع writable می‌شه
+
+MYSQL_LOCAL_WRITE=true       # برای MySQL
+CH_PLAYGROUND_WRITE=true     # برای ClickHouse
+SQLITE_SCRATCH_WRITE=true    # برای SQLite (pragma query_only حذف می‌شه)
+```
+
+</div>
+
+ابزار جدید `db_execute_write` تا وقتی منبع explicitly writable نشده، اجرا نمی‌شه:
+
+<div dir="ltr">
+
+```
+Error: source PROD is read-only;
+       set PG_PROD_WRITE=true in env to enable db_execute_write
+```
+
+</div>
+
+این رفتار به‌صورت یک‌دست در **PostgreSQL · MySQL · ClickHouse · SQLite** اعمال می‌شه. MongoDB / Redis / Elasticsearch ابزارهای اختصاصی خودشون (`mongo_*`، `redis_*`، `es_*`) رو دارن و از مسیر `db_execute_*` رد نمی‌شن.
+
+> 💡 در production بهتره `WRITE` خاموش بمونه و از DB user ای استفاده کنی که فقط grant `SELECT` داره — این بهت دفاع دولایه می‌ده.
 
 ---
 

@@ -50,12 +50,13 @@ func (a *Adapter) Discover(env map[string]string) ([]adapters.Source, error) {
 			Name: name,
 			Kind: a.Kind(),
 			Cfg: map[string]string{
-				"host": cfg["HOST"],
-				"port": orDefault(cfg["PORT"], "3306"),
-				"user": cfg["USER"],
-				"pass": cfg["PASS"],
-				"db":   cfg["DB"],
-				"tls":  cfg["TLS"],
+				"host":  cfg["HOST"],
+				"port":  orDefault(cfg["PORT"], "3306"),
+				"user":  cfg["USER"],
+				"pass":  cfg["PASS"],
+				"db":    cfg["DB"],
+				"tls":   cfg["TLS"],
+				"write": cfg["WRITE"], // "true" → db_execute_write allowed
 			},
 		})
 	}
@@ -238,11 +239,29 @@ WHERE table_schema = ? AND table_name = ? AND referenced_table_name IS NOT NULL`
 }
 
 func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.QueryResult, error) {
-	if err := adapters.AssertReadOnly(q.SQL); err != nil {
-		return adapters.QueryResult{}, err
+	if !q.Write {
+		if err := adapters.AssertReadOnly(q.SQL); err != nil {
+			return adapters.QueryResult{}, err
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	// Writes (INSERT/UPDATE/DELETE/DDL) go through Exec so we can return
+	// rows-affected. SELECT-shaped queries keep the streaming path.
+	if q.Write && !looksLikeSelect(q.SQL) {
+		res, err := c.db.ExecContext(ctx, q.SQL)
+		if err != nil {
+			return adapters.QueryResult{}, err
+		}
+		affected, _ := res.RowsAffected()
+		return adapters.QueryResult{
+			Columns:  []string{"rows_affected"},
+			Rows:     [][]any{{affected}},
+			Affected: affected,
+		}, nil
+	}
+
 	rows, err := c.db.QueryContext(ctx, q.SQL)
 	if err != nil {
 		return adapters.QueryResult{}, err
@@ -262,7 +281,6 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 		if err := rows.Scan(ptrs...); err != nil {
 			return adapters.QueryResult{}, err
 		}
-		// MySQL driver returns []byte for text columns; turn into strings for cleaner output.
 		for i, v := range vals {
 			if b, ok := v.([]byte); ok {
 				vals[i] = string(b)
@@ -271,6 +289,16 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 		data = append(data, vals)
 	}
 	return adapters.QueryResult{Columns: cols, Rows: data}, rows.Err()
+}
+
+// looksLikeSelect inspects the first keyword to decide between Exec and Query.
+func looksLikeSelect(sql string) bool {
+	s := strings.TrimSpace(sql)
+	if s == "" {
+		return false
+	}
+	first := strings.ToUpper(strings.Fields(s)[0])
+	return first == "SELECT" || first == "WITH" || first == "EXPLAIN" || first == "SHOW" || first == "DESCRIBE" || first == "DESC"
 }
 
 func queryToMaps(ctx context.Context, db *sql.DB, q string) ([]map[string]any, error) {

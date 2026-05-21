@@ -74,10 +74,16 @@ type Relationship struct {
 }
 
 // Query carries an execute request.
+//
+// Write defaults to false: adapters must reject anything that mutates state
+// (see AssertReadOnly). The db_execute_write tool flips it to true, but only
+// after confirming the source itself has been marked writable via its
+// per-source env (e.g. PG_<NAME>_WRITE=true).
 type Query struct {
 	SQL     string
 	Catalog string // Trino-style sources can override; ignored elsewhere.
 	Schema  string
+	Write   bool
 }
 
 // QueryResult is a generic tabular response.
