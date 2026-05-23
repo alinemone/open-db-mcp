@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/open-db-mcp/open-db-mcp/internal/auth"
@@ -31,13 +33,25 @@ type rpcError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
+// HandlerOptions controls how HTTPHandler renders responses without changing
+// the call signature for every test.
+type HandlerOptions struct {
+	// CORSOrigins is the allow-list emitted in Access-Control-Allow-Origin.
+	// Empty list → no CORS header at all. A single "*" element opens to all.
+	CORSOrigins []string
+
+	// VerboseErrors lets handler errors leak through to clients verbatim. Use
+	// for local development only.
+	VerboseErrors bool
+}
+
 // HTTPHandler returns an http.Handler that speaks the MCP Streamable HTTP
 // dialect for the methods we care about. GET /mcp returns 405 — we don't
 // upgrade to SSE; one POST = one JSON-RPC response is enough for tools/list
 // and tools/call.
-func HTTPHandler(s *Server) http.Handler {
+func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
+		setCORS(w, r, opts.CORSOrigins)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -98,23 +112,27 @@ func HTTPHandler(s *Server) http.Handler {
 			// redis_* all use this convention).
 			started := time.Now()
 			source, _ := p.Arguments["source"].(string)
+			principal := auth.PrincipalOf(ctx)
 
 			text, err := s.Handle(ctx, p.Name, p.Arguments)
 			dur := time.Since(started)
 
 			if err != nil {
+				reason := classifyErr(err)
 				slog.WarnContext(ctx, "tool.call",
-					"user", auth.Role(ctx),
+					"user", principal.Name,
+					"role", principal.Role.String(),
 					"ip", clientIP(r),
 					"tool", p.Name,
 					"source", source,
 					"duration_ms", dur.Milliseconds(),
 					"status", "error",
+					"reason", reason,
 					"err", err.Error(),
 				)
 				writeRPCResult(w, req.ID, map[string]any{
 					"content": []map[string]any{{
-						"type": "text", "text": "Error: " + err.Error(),
+						"type": "text", "text": "Error: " + clientErrMsg(err, opts.VerboseErrors),
 					}},
 					"isError": true,
 				})
@@ -122,7 +140,8 @@ func HTTPHandler(s *Server) http.Handler {
 			}
 
 			slog.InfoContext(ctx, "tool.call",
-				"user", auth.Role(ctx),
+				"user", principal.Name,
+				"role", principal.Role.String(),
 				"ip", clientIP(r),
 				"tool", p.Name,
 				"source", source,
@@ -150,8 +169,30 @@ func HTTPHandler(s *Server) http.Handler {
 	})
 }
 
-func setCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+// setCORS writes Access-Control-* headers only when CORSOrigins is non-empty.
+// Single-element "*" opens to all; otherwise the Origin header is matched
+// exactly against the allow-list.
+func setCORS(w http.ResponseWriter, r *http.Request, origins []string) {
+	if len(origins) == 0 {
+		return
+	}
+	allow := ""
+	if len(origins) == 1 && origins[0] == "*" {
+		allow = "*"
+	} else {
+		o := r.Header.Get("Origin")
+		for _, a := range origins {
+			if a == o {
+				allow = o
+				break
+			}
+		}
+	}
+	if allow == "" {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", allow)
+	w.Header().Set("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-Api-Key, Content-Type, Mcp-Session-Id")
 	w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -166,7 +207,7 @@ func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
 // X-Forwarded-For (set by reverse proxies) and falling back to RemoteAddr.
 func clientIP(r *http.Request) string {
 	if h := r.Header.Get("X-Forwarded-For"); h != "" {
-		if i := indexComma(h); i >= 0 {
+		if i := strings.IndexByte(h, ','); i >= 0 {
 			return h[:i]
 		}
 		return h
@@ -177,15 +218,6 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func indexComma(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == ',' {
-			return i
-		}
-	}
-	return -1
-}
-
 func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK) // JSON-RPC errors travel as 200 with an Error field
@@ -194,4 +226,71 @@ func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg stri
 		ID:      id,
 		Error:   &rpcError{Code: code, Message: msg},
 	})
+}
+
+// classifyErr labels an error for the audit log. The classification feeds
+// alerting later (e.g. spike of forbidden_role => leaked reader token).
+func classifyErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "forbidden"):
+		return "forbidden"
+	case strings.Contains(msg, "source not found"):
+		return "not_found"
+	case strings.Contains(msg, "read-only"):
+		return "readonly"
+	default:
+		return "error"
+	}
+}
+
+// clientErrMsg decides what to send back to the client. User-actionable errors
+// (auth, RBAC, "source not found", AssertReadOnly rejections) pass through;
+// anything else collapses to a generic message unless VerboseErrors is set.
+func clientErrMsg(err error, verbose bool) string {
+	if err == nil {
+		return ""
+	}
+	if verbose {
+		return err.Error()
+	}
+	msg := err.Error()
+	if userVisible(msg) {
+		return msg
+	}
+	return "internal error"
+}
+
+// userVisible reports whether an error message is safe to return verbatim.
+func userVisible(msg string) bool {
+	prefixes := []string{
+		"forbidden",
+		"source not found",
+		"source ", // e.g. "source X is read-only..."
+		"query is required",
+		"key is required",
+		"invalid filter",
+		"invalid params",
+		"pipeline stages must be",
+		"unknown tool",
+		"unsupported type",
+		"query must start with",
+		"empty query",
+		"destructive keyword",
+		"empty identifier",
+		"identifier too long",
+		"invalid character in identifier",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(msg, p) {
+			return true
+		}
+	}
+	// Allow wrapped errors that still expose the same prefixes via errors.Is/As
+	// fallbacks. (Currently none; placeholder for future sentinel errors.)
+	_ = errors.Is
+	return false
 }

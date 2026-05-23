@@ -25,7 +25,7 @@
 - 🛡️ **فقط-خواندنی به‌صورت پیش‌فرض** — `db_execute_query` در زمان parse، دستورات `INSERT/UPDATE/DELETE/DROP/ALTER` رو رد می‌کنه. می‌تونی به production هم وصلش کنی. برای write یک ابزار جداگانه به اسم `db_execute_write` هست که فقط روی منابعی کار می‌کنه که صریحاً `*_WRITE=true` دارن.
 - 🐳 **Docker image کوچک** — مبتنی بر Alpine، حدود ۱۲ مگابایت. زیر یک ثانیه بالا میاد.
 - ⚡ **Streamable HTTP** — مستقیم با **Claude Desktop**، **Claude Code**، **Codex**، **Gemini**، **Cursor**، **Windsurf**، **Zed**، **Continue**، **Cline** و هر چیزی که MCP HTTP بفهمه کار می‌کنه.
-- 🔑 **کلید API به ازای هر کاربر** — به سبک `MCP_USER_<NAME>=<token>`. راحت grep می‌شه، راحت rotate می‌شه، راحت audit می‌شه.
+- 🔑 **کلید API به ازای هر کاربر همراه نقش** — `MCP_USER_<NAME>=<token>` + `MCP_USER_<NAME>_ROLE=reader|writer|admin`. می‌تونی توکن reader به تحلیل‌گرها بدی، writer به محیط dev، و admin به خودت. مقایسهٔ توکن constant-time؛ توکن خام هرگز از env بیرون نمیاد.
 - 📦 **خروجی TOON-encoded** — فرمت فشرده و token-friendly که می‌ذاره LLM ردیف‌های بیشتری در همون context ببینه.
 - 🐘🐬🟦🍃🟥🔵🔍 **یک سرور، چندین دیتابیس** — PostgreSQL، MySQL/MariaDB، ClickHouse، MongoDB، Redis، SQLite، Elasticsearch (به‌علاوه پروفایل اختیاری CLOG برای تحلیل لاگ‌های Kubernetes).
 
@@ -75,13 +75,20 @@ curl http://localhost:3000/health
 {
   "mcpServers": {
     "open-db": {
-      "url": "http://localhost:3000/mcp?api_key=changeme"
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer changeme"
+      }
     }
   }
 }
 ```
 
 </div>
+
+> توکن به‌صورت پیش‌فرض از طریق هدر `Authorization` (یا `X-Api-Key`) منتقل می‌شه.
+> اگر کلاینت‌ت قابلیت ارسال هدر سفارشی نداره، `MCP_ALLOW_QUERY_KEY=true` رو
+> در `.env` ست کن تا روش قدیمی `?api_key=` فعال بشه.
 
 بعد از مدل بپرس: *«همه‌ی دیتابیس‌هام رو لیست کن و ۵ تا بزرگ‌ترین جدول هرکدوم رو نشون بده»*. خودش zincir می‌کنه `db_list_sources` → `db_list_tables` → `db_table_card`.
 
@@ -111,6 +118,54 @@ CH_OLAP_HOST=10.0.0.6
 
 ---
 
+## احراز هویت و نقش‌ها (کاربرها)
+
+هر کاربر احراز هویت‌شده یک نقش داره. **ابزارهای read** برای هر توکن معتبری محدودیتی ندارن؛ ولی **write به دو گارد مستقل نیاز داره** که هر دو باید پاس شن:
+
+1. نقش کاربر `writer` یا `admin` باشه (در env به ازای هر کاربر تعریف می‌شه).
+2. منبع به‌طور صریح writable علامت‌گذاری شده باشه (`PG_<NAME>_WRITE=true` و مانند آن).
+
+نقش `admin` کلید قطع‌کنندهٔ سطح منبع رو **دور نمی‌زنه** — اون فلگ یک گارد deployment‌ست، نه یک سطح دسترسی.
+
+<div dir="ltr">
+
+```env
+MCP_USER_ADMIN=tok-admin
+MCP_USER_ADMIN_ROLE=admin           # روی هر منبع WRITE=true می‌تونه بنویسه
+
+MCP_USER_DEV=tok-dev
+MCP_USER_DEV_ROLE=writer            # روی منابع writable می‌تونه بنویسه
+
+MCP_USER_ALI=tok-ali                # نقش پیش‌فرض reader است؛ فقط خواندن
+
+PG_DEV_HOST=...                     # writable: dev/admin می‌تونن تغییر بدن
+PG_DEV_WRITE=true
+
+PG_PROD_HOST=...                    # NOT writable: حتی admin هم خطای read-only می‌گیره
+```
+
+</div>
+
+ماتریس رفتار:
+
+<div dir="ltr">
+
+| Caller role | Source `_WRITE=true` | `db_execute_write` result                |
+|-------------|----------------------|------------------------------------------|
+| reader      | any                  | `forbidden: user X (role=reader)…`       |
+| writer      | true                 | ✅ allowed                                |
+| writer      | false                | `source X is read-only; set …WRITE=true` |
+| admin       | true                 | ✅ allowed                                |
+| admin       | false                | `source X is read-only; …`               |
+
+</div>
+
+هر فراخوانی audit-log می‌شه با فیلدهای `user`، `role`، `source`، `tool`، `duration_ms` و در صورت deny فیلد `reason`. مقایسهٔ توکن constant-time هست؛ توکن خام در حافظه با sha256 hash می‌شه.
+
+> **نکته:** برای دفاع دولایه، علاوه بر این گاردها، در سطح دیتابیس هم یک user با فقط grant `SELECT` بساز برای منابع read-only و یک user جداگانه با grant write برای منابع writable.
+
+---
+
 ## ابزارهای MCP موجود
 
 **عمومی (روی همه‌ی منابع SQL-like کار می‌کنن):**
@@ -133,7 +188,11 @@ CH_OLAP_HOST=10.0.0.6
 
 ## Write mode (اختیاری، به ازای هر منبع)
 
-به‌صورت پیش‌فرض **همه‌ی منابع فقط-خواندنی هستن**. ابزار `db_execute_query` هر دستوری غیر از `SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` رو در زمان parse رد می‌کنه، و در driver هایی که پشتیبانی می‌کنن، transaction زیرین هم به‌صورت read-only باز می‌شه (Postgres) یا connection با pragma `query_only` ساخته می‌شه (SQLite).
+به‌صورت پیش‌فرض **همه‌ی منابع فقط-خواندنی هستن**. سه لایه روی هم نشسته‌ان تا همین‌طور بمونه:
+
+1. **گارد statement** — `db_execute_query` هر دستوری غیر از `SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` رو در زمان parse رد می‌کنه.
+2. **read-only در سطح driver** — Postgres یک تراکنش read-only باز می‌کنه، SQLite با pragma `query_only` کار می‌کنه، MySQL خواندن رو در یک تراکنش `READ ONLY` بسته‌بندی می‌کنه و ClickHouse برای آن کوئری `readonly=2` رو فعال می‌کنه.
+3. **RBAC** — write علاوه‌بر این موارد، نیاز به نقش `writer` یا بالاتر داره (به بخش [احراز هویت و نقش‌ها](#احراز-هویت-و-نقش‌ها-کاربرها) مراجعه کن).
 
 برای فعال‌سازی write روی یک منبع خاص، `<PREFIX>_<NAME>_WRITE=true` رو ست کن:
 
@@ -150,18 +209,19 @@ SQLITE_SCRATCH_WRITE=true    # برای SQLite (pragma query_only حذف می‌
 
 </div>
 
-ابزار جدید `db_execute_write` تا وقتی منبع explicitly writable نشده، اجرا نمی‌شه:
+ابزار `db_execute_write` تا وقتی هم منبع writable نشده **هم** نقش کاربر writer/admin نباشه اجرا نمی‌شه:
 
 <div dir="ltr">
 
 ```
+Error: forbidden: user ali (role=reader) cannot write
 Error: source PROD is read-only;
        set PG_PROD_WRITE=true in env to enable db_execute_write
 ```
 
 </div>
 
-این رفتار به‌صورت یک‌دست در **PostgreSQL · MySQL · ClickHouse · SQLite** اعمال می‌شه. MongoDB / Redis / Elasticsearch ابزارهای اختصاصی خودشون (`mongo_*`، `redis_*`، `es_*`) رو دارن و از مسیر `db_execute_*` رد نمی‌شن.
+این رفتار به‌صورت یک‌دست در **PostgreSQL · MySQL · ClickHouse · SQLite** اعمال می‌شه. MongoDB / Redis / Elasticsearch ابزارهای اختصاصی خودشون (`mongo_*`، `redis_*`، `es_*`) رو دارن و از مسیر `db_execute_*` رد نمی‌شن. ابزارهای `mongo_find` و `mongo_aggregate` هم operatorهای `$out`, `$merge`, `$function`, `$accumulator`, `$where` و `$eval` رو رد می‌کنن تا واقعاً read-only بمونن.
 
 > 💡 در production بهتره `WRITE` خاموش بمونه و از DB user ای استفاده کنی که فقط grant `SELECT` داره — این بهت دفاع دولایه می‌ده.
 

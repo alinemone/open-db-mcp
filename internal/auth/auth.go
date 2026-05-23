@@ -8,18 +8,26 @@ import (
 
 type ctxKey int
 
-const userKey ctxKey = 0
+const principalKey ctxKey = 0
+
+// Options tweaks middleware behavior without changing the call signature.
+type Options struct {
+	// AllowQueryKey enables ?api_key= as a token source. Off by default — query
+	// strings leak into reverse-proxy logs, browser history, and Referer
+	// headers.
+	AllowQueryKey bool
+}
 
 // Middleware returns an http.Handler that rejects requests without a valid
-// token. The token may arrive as:
+// token. Token sources (in order):
 //
 //   - Authorization: Bearer <token>
 //   - X-Api-Key: <token>
-//   - ?api_key=<token>
+//   - ?api_key=<token>     (only if Options.AllowQueryKey == true)
 //
 // Paths in `open` bypass the check entirely (e.g. "/health"). The matched
-// role is stored on the request context.
-func Middleware(keys map[string]string, open ...string) func(http.Handler) http.Handler {
+// Principal is stored on the request context.
+func Middleware(principals []Principal, opts Options, open ...string) func(http.Handler) http.Handler {
 	openSet := map[string]struct{}{}
 	for _, p := range open {
 		openSet[p] = struct{}{}
@@ -30,28 +38,35 @@ func Middleware(keys map[string]string, open ...string) func(http.Handler) http.
 				next.ServeHTTP(w, r)
 				return
 			}
-			token := extract(r)
-			role, ok := keys[token]
-			if token == "" || !ok {
+			token := extract(r, opts.AllowQueryKey)
+			if token == "" {
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, `{"error":"unauthorized","message":"valid token required"}`, http.StatusUnauthorized)
 				return
 			}
-			ctx := r.Context()
-			ctx = withRole(ctx, role)
+			p, ok := lookup(principals, token)
+			if !ok {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				http.Error(w, `{"error":"unauthorized","message":"valid token required"}`, http.StatusUnauthorized)
+				return
+			}
+			ctx := WithPrincipal(r.Context(), p)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-func extract(r *http.Request) string {
+func extract(r *http.Request, allowQuery bool) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(h[len("Bearer "):])
 	}
 	if h := r.Header.Get("X-Api-Key"); h != "" {
 		return strings.TrimSpace(h)
 	}
-	return r.URL.Query().Get("api_key")
+	if allowQuery {
+		return r.URL.Query().Get("api_key")
+	}
+	return ""
 }
 
 // RedactURL replaces the api_key query parameter with REDACTED so log lines

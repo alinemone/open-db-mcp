@@ -230,6 +230,13 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 		}, nil
 	}
 
+	// Read path: enable readonly=2 for this query only. Mode 2 still allows
+	// SETTINGS changes (which the driver may issue), unlike mode 1.
+	if !q.Write {
+		ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
+			"readonly": 2,
+		}))
+	}
 	rows, err := c.db.QueryContext(ctx, q.SQL)
 	if err != nil {
 		return adapters.QueryResult{}, err

@@ -102,6 +102,9 @@ func (d *Deps) mongoFind(ctx context.Context, args map[string]any) (string, erro
 	if filter == nil {
 		filter = map[string]any{}
 	}
+	if err := assertReadOnlyMongo(filter); err != nil {
+		return "", err
+	}
 	limit := int64(20)
 	if v, ok := args["limit"].(float64); ok {
 		limit = int64(v)
@@ -150,6 +153,9 @@ func (d *Deps) mongoAggregate(ctx context.Context, args map[string]any) (string,
 		if !ok {
 			return "", fmt.Errorf("pipeline stages must be objects")
 		}
+		if err := assertReadOnlyMongo(m); err != nil {
+			return "", err
+		}
 		b, err := toBSON(m)
 		if err != nil {
 			return "", err
@@ -171,6 +177,41 @@ func (d *Deps) mongoAggregate(ctx context.Context, args map[string]any) (string,
 		docs = append(docs, m)
 	}
 	return format.ToTOON("AggResults", docs), nil
+}
+
+// disallowedMongoOps lists operators that can write data or execute server-side
+// code. mongo_find / mongo_aggregate are advertised as read-only, so we reject
+// any payload that mentions one of these.
+var disallowedMongoOps = map[string]bool{
+	"$out":         true, // pipeline stage: writes results to a collection
+	"$merge":       true, // pipeline stage: upserts into a collection
+	"$function":    true, // server-side JavaScript
+	"$accumulator": true, // server-side JavaScript
+	"$where":       true, // server-side JavaScript predicate
+	"$eval":        true, // legacy server-side eval
+}
+
+// assertReadOnlyMongo walks an arbitrary BSON-ish structure (map / slice / scalar)
+// and rejects it if any map key is in disallowedMongoOps.
+func assertReadOnlyMongo(v any) error {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			if disallowedMongoOps[k] {
+				return fmt.Errorf("forbidden mongo operator: %s", k)
+			}
+			if err := assertReadOnlyMongo(child); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if err := assertReadOnlyMongo(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func toBSON(m map[string]any) (bson.D, error) {

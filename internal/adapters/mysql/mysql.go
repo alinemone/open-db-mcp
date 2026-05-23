@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql" // driver
+	mysqldrv "github.com/go-sql-driver/mysql"
 
 	"github.com/open-db-mcp/open-db-mcp/internal/adapters"
 	"github.com/open-db-mcp/open-db-mcp/internal/config"
@@ -71,12 +71,22 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 	}
 	a.mu.Unlock()
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&readTimeout=300s&writeTimeout=300s",
-		src.Cfg["user"], src.Cfg["pass"], src.Cfg["host"], src.Cfg["port"], src.Cfg["db"])
+	// Build the DSN through the driver's config so user/pass are escaped
+	// correctly even when they contain ':', '@', '/', or other DSN-special
+	// characters.
+	mcfg := mysqldrv.NewConfig()
+	mcfg.User = src.Cfg["user"]
+	mcfg.Passwd = src.Cfg["pass"]
+	mcfg.Net = "tcp"
+	mcfg.Addr = src.Cfg["host"] + ":" + src.Cfg["port"]
+	mcfg.DBName = src.Cfg["db"]
+	mcfg.ParseTime = true
+	mcfg.ReadTimeout = 300 * time.Second
+	mcfg.WriteTimeout = 300 * time.Second
 	if tls := src.Cfg["tls"]; tls != "" {
-		dsn += "&tls=" + tls
+		mcfg.TLSConfig = tls
 	}
-	db, err := sql.Open("mysql", dsn)
+	db, err := sql.Open("mysql", mcfg.FormatDSN())
 	if err != nil {
 		return nil, fmt.Errorf("mysql open %s: %w", src.Name, err)
 	}
@@ -211,7 +221,15 @@ func (c *conn) SampleRows(ctx context.Context, schema, table string, limit int) 
 	if limit <= 0 {
 		limit = 5
 	}
-	q := fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT %d", schema, table, limit)
+	qSchema, err := adapters.QuoteIdentMySQL(schema)
+	if err != nil {
+		return nil, err
+	}
+	qTable, err := adapters.QuoteIdentMySQL(table)
+	if err != nil {
+		return nil, err
+	}
+	q := fmt.Sprintf("SELECT * FROM %s.%s LIMIT %d", qSchema, qTable, limit)
 	return queryToMaps(ctx, c.db, q)
 }
 
@@ -262,7 +280,15 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 		}, nil
 	}
 
-	rows, err := c.db.QueryContext(ctx, q.SQL)
+	// Read path: wrap in a READ ONLY transaction so the server (not just the
+	// regex guard in AssertReadOnly) rejects any sneaky mutating statement.
+	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return adapters.QueryResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, q.SQL)
 	if err != nil {
 		return adapters.QueryResult{}, err
 	}

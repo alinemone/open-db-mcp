@@ -3,14 +3,25 @@ package config
 import (
 	"strconv"
 	"strings"
+
+	"github.com/open-db-mcp/open-db-mcp/internal/auth"
 )
 
 // ServerConfig is the top-level runtime configuration parsed from env.
 type ServerConfig struct {
-	Port     int
-	APIKeys  map[string]string // token -> role
-	LogLevel string
-	TZ       string
+	Port       int
+	Principals []auth.Principal
+	LogLevel   string
+	TZ         string
+
+	// AllowQueryKey lets clients pass ?api_key=<token> instead of a header.
+	// Off by default — query strings leak into reverse-proxy logs.
+	AllowQueryKey bool
+
+	// CORSOrigins is the explicit allow-list emitted in
+	// Access-Control-Allow-Origin. Empty slice → no CORS header at all.
+	// A single "*" element is allowed for fully-open deployments.
+	CORSOrigins []string
 
 	CLOG CLOGConfig
 }
@@ -33,10 +44,12 @@ type CLOGConfig struct {
 // Load reads ServerConfig from the supplied env map.
 func Load(env map[string]string) ServerConfig {
 	c := ServerConfig{
-		Port:     atoi(env["PORT"], 3000),
-		APIKeys:  parseAPIKeys(env),
-		LogLevel: defaultStr(env["LOG_LEVEL"], "info"),
-		TZ:       defaultStr(env["TZ"], "UTC"),
+		Port:          atoi(env["PORT"], 3000),
+		Principals:    parsePrincipals(env),
+		LogLevel:      defaultStr(env["LOG_LEVEL"], "info"),
+		TZ:            defaultStr(env["TZ"], "UTC"),
+		AllowQueryKey: parseBool(env["MCP_ALLOW_QUERY_KEY"]),
+		CORSOrigins:   splitCSV(env["MCP_CORS_ORIGINS"]),
 		CLOG: CLOGConfig{
 			ESSource:      env["CLOG_ES_SOURCE"],
 			IngressIndex:  defaultStr(env["CLOG_INGRESS_INDEX"], "logs-ingress-*"),
@@ -54,23 +67,30 @@ func Load(env map[string]string) ServerConfig {
 	return c
 }
 
-// parseAPIKeys collects API tokens from two styles of env vars:
+// parsePrincipals collects API tokens from two styles of env vars:
 //
-//  1. Per-user (preferred, readable):
-//     MCP_USER_ALI=ali2412jsfdjag
-//     MCP_USER_AMIR=amir122rfds
-//     The role becomes the lowercased name after the prefix.
+//  1. Per-user (preferred):
+//     MCP_USER_ALI=token-for-ali
+//     MCP_USER_ALI_ROLE=writer        (default: reader)
 //
 //  2. Legacy comma-list (kept for backward compat with db-mcp):
 //     MCP_API_KEYS=token1:role1,token2:role2
 //
-// Tokens from both sources are merged; on conflict, the per-user form wins.
-func parseAPIKeys(env map[string]string) map[string]string {
-	out := map[string]string{}
+// Tokens from both sources are merged into a slice keyed by the sha256 hash of
+// the raw token (see auth.Principal). On token collision, the per-user form
+// wins.
+func parsePrincipals(env map[string]string) []auth.Principal {
+	// rawByName collects token + role for each named user before hashing, so we
+	// can override legacy entries with the per-user form deterministically.
+	type raw struct {
+		token string
+		role  auth.RoleLevel
+	}
+	byName := map[string]raw{}
 
 	// Legacy form first so per-user can override.
-	if raw := env["MCP_API_KEYS"]; raw != "" {
-		for _, pair := range strings.Split(raw, ",") {
+	if rawList := env["MCP_API_KEYS"]; rawList != "" {
+		for i, pair := range strings.Split(rawList, ",") {
 			pair = strings.TrimSpace(pair)
 			if pair == "" {
 				continue
@@ -81,24 +101,44 @@ func parseAPIKeys(env map[string]string) map[string]string {
 			if token == "" {
 				continue
 			}
-			if role == "" {
-				role = "user"
+			name := role
+			if name == "" {
+				name = "user"
 			}
-			out[token] = role
+			// Disambiguate duplicate legacy role labels.
+			key := name + "#" + strconv.Itoa(i)
+			byName[key] = raw{token: token, role: auth.ParseRole(role)}
 		}
 	}
 
-	// Per-user form: any env key starting with MCP_USER_.
+	// Per-user form: any env key starting with MCP_USER_ and *not* ending in
+	// _ROLE. The role suffix is read separately so users can supply it
+	// alongside the token.
 	for k, v := range env {
 		if !strings.HasPrefix(k, "MCP_USER_") {
 			continue
 		}
-		role := strings.ToLower(strings.TrimPrefix(k, "MCP_USER_"))
-		token := strings.TrimSpace(v)
-		if role == "" || token == "" {
+		if strings.HasSuffix(k, "_ROLE") {
 			continue
 		}
-		out[token] = role
+		name := strings.ToLower(strings.TrimPrefix(k, "MCP_USER_"))
+		token := strings.TrimSpace(v)
+		if name == "" || token == "" {
+			continue
+		}
+		role := auth.ParseRole(env["MCP_USER_"+strings.ToUpper(name)+"_ROLE"])
+		byName[name] = raw{token: token, role: role}
+	}
+
+	out := make([]auth.Principal, 0, len(byName))
+	for name, r := range byName {
+		// Legacy key collisions use the disambiguator suffix; drop it for the
+		// stored Name so logs read cleanly.
+		displayName := name
+		if i := strings.IndexByte(name, '#'); i >= 0 {
+			displayName = name[:i]
+		}
+		out = append(out, auth.NewPrincipal(displayName, r.role, r.token))
 	}
 	return out
 }
@@ -134,4 +174,12 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

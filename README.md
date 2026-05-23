@@ -23,7 +23,7 @@
 - 🛡️ **Read-only by default** — `db_execute_query` rejects `INSERT/UPDATE/DELETE/DROP/ALTER` at parse time. Safe to point at production. Writes are gated behind a separate `db_execute_write` tool that only fires for sources you explicitly mark `*_WRITE=true`.
 - 🐳 **Single tiny Docker image** — Alpine-based, ~12 MB. Starts in under a second.
 - ⚡ **Streamable HTTP** — works out of the box with **Claude Desktop**, **Claude Code**, **Codex**, **Gemini**, **Cursor**, **Windsurf**, **Zed**, **Continue**, **Cline**, and anything else that speaks MCP HTTP.
-- 🔑 **Per-user API keys** — `MCP_USER_<NAME>=<token>` style. Easy to grep, easy to rotate, easy to audit.
+- 🔑 **Per-user API keys with roles** — `MCP_USER_<NAME>=<token>` + `MCP_USER_<NAME>_ROLE=reader|writer|admin`. Hand out a reader token to analysts, a writer token to a dev environment, an admin token to yourself. Constant-time token comparison; the raw token never leaves env.
 - 📦 **TOON-encoded results** — compact token-friendly format that lets the LLM see more rows for the same context budget.
 - 🐘🐬🟦🍃🟥🔵🔍 **One server, many databases** — PostgreSQL, MySQL/MariaDB, ClickHouse, MongoDB, Redis, SQLite, Elasticsearch (plus an opt-in CLOG profile for Kubernetes log analysis).
 
@@ -63,11 +63,18 @@ Wire it into your MCP client:
 {
   "mcpServers": {
     "open-db": {
-      "url": "http://localhost:3000/mcp?api_key=changeme"
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer changeme"
+      }
     }
   }
 }
 ```
+
+> Tokens travel in the `Authorization` (or `X-Api-Key`) header by default.
+> If your client cannot send custom headers, set `MCP_ALLOW_QUERY_KEY=true`
+> in `.env` to enable the legacy `?api_key=` URL form.
 
 Then ask the model: *“list every database I have, then show the 5 biggest tables in each”.* It will chain `db_list_sources` → `db_list_tables` → `db_table_card` for you.
 
@@ -93,6 +100,53 @@ CH_OLAP_HOST=10.0.0.6
 
 ---
 
+## Authorization (users and roles)
+
+Every authenticated user gets a role. **Read tools are unrestricted** for any
+valid token; **writes require two independent gates** to agree:
+
+1. The caller's role is `writer` or `admin` (set per user in env).
+2. The target source is explicitly marked writable (`PG_<NAME>_WRITE=true`,
+   etc.).
+
+`admin` does **not** bypass the source-level kill-switch — that flag is a
+deployment safety, not a permission.
+
+```env
+MCP_USER_ADMIN=tok-admin
+MCP_USER_ADMIN_ROLE=admin           # may write on any source flagged WRITE=true
+
+MCP_USER_DEV=tok-dev
+MCP_USER_DEV_ROLE=writer            # may write on writable sources
+
+MCP_USER_ALI=tok-ali                # role defaults to reader; read-only
+
+PG_DEV_HOST=...                     # writable: dev/admin can mutate
+PG_DEV_WRITE=true
+
+PG_PROD_HOST=...                    # NOT writable: even admin gets read-only error
+```
+
+Behavior matrix:
+
+| Caller role | Source `_WRITE=true` | `db_execute_write` result            |
+|-------------|----------------------|--------------------------------------|
+| reader      | any                  | `forbidden: user X (role=reader)…`   |
+| writer      | true                 | ✅ allowed                            |
+| writer      | false                | `source X is read-only; set …WRITE=true` |
+| admin       | true                 | ✅ allowed                            |
+| admin       | false                | `source X is read-only; …`           |
+
+Every call is audit-logged with `user`, `role`, `source`, `tool`, `duration_ms`,
+and (on deny) a `reason`. Token comparison is constant-time; raw tokens are
+sha256-hashed in memory.
+
+> **Tip:** for defence-in-depth, also create a DB-level user with only
+> `SELECT` grants for read-only sources, and a separate user with write grants
+> for writable sources. The two layers stack.
+
+---
+
 ## Available MCP tools
 
 **Generic (any SQL-like source):**
@@ -115,7 +169,11 @@ CH_OLAP_HOST=10.0.0.6
 
 ## Write mode (opt-in, per source)
 
-By default **every source is read-only**. The `db_execute_query` tool rejects any non-`SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` statement at parse time, and where the driver supports it the underlying transaction is also opened read-only (Postgres) or the connection carries a `query_only` PRAGMA (SQLite).
+By default **every source is read-only**. Three layers stack to keep it that way:
+
+1. **Statement guard** — `db_execute_query` rejects any non-`SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` statement at parse time.
+2. **Driver-level read-only** — Postgres opens a read-only transaction, SQLite carries the `query_only` PRAGMA, MySQL wraps reads in a `READ ONLY` transaction, and ClickHouse enables `readonly=2` for the query.
+3. **RBAC** — writes additionally require `role >= writer` (see [Authorization](#authorization-users-and-roles)).
 
 To allow writes on a specific source, set `<PREFIX>_<NAME>_WRITE=true`:
 
@@ -128,14 +186,15 @@ CH_PLAYGROUND_WRITE=true     # same for ClickHouse
 SQLITE_SCRATCH_WRITE=true    # drops the query_only PRAGMA on this DB
 ```
 
-The new `db_execute_write` tool refuses to run unless the target source has been marked writable:
+The new `db_execute_write` tool refuses to run unless the target source has been marked writable **and** the caller has a writer/admin role:
 
 ```
+Error: forbidden: user ali (role=reader) cannot write
 Error: source PROD is read-only;
        set PG_PROD_WRITE=true in env to enable db_execute_write
 ```
 
-This is enforced uniformly across **PostgreSQL · MySQL · ClickHouse · SQLite**. MongoDB / Redis / Elasticsearch use their own tool families (`mongo_*`, `redis_*`, `es_*`) and don’t flow through `db_execute_*`.
+This is enforced uniformly across **PostgreSQL · MySQL · ClickHouse · SQLite**. MongoDB / Redis / Elasticsearch use their own tool families (`mongo_*`, `redis_*`, `es_*`) and don’t flow through `db_execute_*`. The `mongo_find` and `mongo_aggregate` tools also reject `$out`, `$merge`, `$function`, `$accumulator`, `$where`, and `$eval` operators so they remain genuinely read-only.
 
 > 💡 In production, prefer leaving `WRITE` off and using a DB user with only `SELECT` grants — that gives you defence in depth.
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -84,11 +85,20 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 	}
 	a.mu.Unlock()
 
-	dsn := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		src.Cfg["host"], src.Cfg["port"], src.Cfg["user"], src.Cfg["pass"], src.Cfg["db"], src.Cfg["sslmode"],
-	)
-	pcfg, err := pgxpool.ParseConfig(dsn)
+	// URL form auto-escapes special characters (':', '@', spaces, etc.) in user
+	// and password. Building the DSN as `host=... password=...` is unsafe when
+	// secrets contain whitespace or quotes.
+	q := url.Values{}
+	q.Set("sslmode", src.Cfg["sslmode"])
+	q.Set("connect_timeout", "5")
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(src.Cfg["user"], src.Cfg["pass"]),
+		Host:     src.Cfg["host"] + ":" + src.Cfg["port"],
+		Path:     "/" + src.Cfg["db"],
+		RawQuery: q.Encode(),
+	}
+	pcfg, err := pgxpool.ParseConfig(u.String())
 	if err != nil {
 		return nil, fmt.Errorf("pg parse config %s: %w", src.Name, err)
 	}
@@ -231,7 +241,15 @@ FROM pg_indexes
 WHERE schemaname = $1 AND tablename = $2`
 
 func (c *conn) TableStats(ctx context.Context, schema, table string) (adapters.TableStats, error) {
-	fqn := fmt.Sprintf("%q.%q", schema, table)
+	qSchema, err := adapters.QuoteIdentPG(schema)
+	if err != nil {
+		return adapters.TableStats{}, err
+	}
+	qTable, err := adapters.QuoteIdentPG(table)
+	if err != nil {
+		return adapters.TableStats{}, err
+	}
+	fqn := qSchema + "." + qTable
 	var ts adapters.TableStats
 	if err := c.pool.QueryRow(ctx, sqlTableStats, fqn, schema, table).Scan(&ts.SizeBytes, &ts.RowEstimate); err != nil {
 		return ts, err
@@ -254,7 +272,15 @@ func (c *conn) SampleRows(ctx context.Context, schema, table string, limit int) 
 	if limit <= 0 {
 		limit = 5
 	}
-	sql := fmt.Sprintf(`SELECT * FROM %q.%q LIMIT %d`, schema, table, limit)
+	qSchema, err := adapters.QuoteIdentPG(schema)
+	if err != nil {
+		return nil, err
+	}
+	qTable, err := adapters.QuoteIdentPG(table)
+	if err != nil {
+		return nil, err
+	}
+	sql := fmt.Sprintf(`SELECT * FROM %s.%s LIMIT %d`, qSchema, qTable, limit)
 	rows, err := c.pool.Query(ctx, sql)
 	if err != nil {
 		return nil, err

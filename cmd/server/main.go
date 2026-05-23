@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -81,8 +82,15 @@ func main() {
 	go search.RefreshEvery(ctx, idx, sources, time.Hour)
 
 	// 4. HTTP server.
+	authOpts := auth.Options{AllowQueryKey: cfg.AllowQueryKey}
+	mw := auth.Middleware(cfg.Principals, authOpts, "/health", "/version")
+	handlerOpts := mcp.HandlerOptions{
+		CORSOrigins:   cfg.CORSOrigins,
+		VerboseErrors: cfg.LogLevel == "debug",
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", auth.Middleware(cfg.APIKeys, "/health", "/version")(mcp.HTTPHandler(srv)))
+	mux.Handle("/mcp", mw(mcp.HTTPHandler(srv, handlerOpts)))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
@@ -91,10 +99,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"version":"` + version + `"}`))
 	})
-	mux.Handle("/sources", auth.Middleware(cfg.APIKeys, "/health", "/version")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux.Handle("/sources", mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Lazy hand-rolled JSON to avoid pulling encoder/json for this tiny payload.
-		_, _ = w.Write([]byte(`{"count":` + itoa(len(sources)) + `}`))
+		_, _ = w.Write([]byte(`{"count":` + strconv.Itoa(len(sources)) + `}`))
 	})))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -102,10 +109,18 @@ func main() {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute, // matches the adapter-level query timeout
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
-		slog.InfoContext(ctx, "open-db-mcp listening", "addr", addr)
+		slog.InfoContext(ctx, "open-db-mcp listening",
+			"addr", addr,
+			"users", len(cfg.Principals),
+			"cors_origins", len(cfg.CORSOrigins),
+			"allow_query_key", cfg.AllowQueryKey,
+		)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.ErrorContext(ctx, "http server error", "err", err)
 			stop()
@@ -136,5 +151,3 @@ func setupLogging(level string) {
 	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
 	slog.SetDefault(slog.New(h))
 }
-
-func itoa(n int) string { return fmt.Sprintf("%d", n) }

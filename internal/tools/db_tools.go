@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/open-db-mcp/open-db-mcp/internal/adapters"
+	"github.com/open-db-mcp/open-db-mcp/internal/auth"
 	"github.com/open-db-mcp/open-db-mcp/internal/clog"
 	"github.com/open-db-mcp/open-db-mcp/internal/format"
 	"github.com/open-db-mcp/open-db-mcp/internal/mcp"
@@ -338,9 +339,16 @@ func (d *Deps) executeQuery(ctx context.Context, args map[string]any) (string, e
 	return format.ToTOONColumns("Result", res.Columns, res.Rows), nil
 }
 
-// executeWrite is the opt-in mutating counterpart of executeQuery. It refuses
-// to run unless the requested source has been explicitly marked writable in
-// env (e.g. PG_DEV_WRITE=true) — by default every source is read-only.
+// executeWrite is the opt-in mutating counterpart of executeQuery.
+//
+// Two gates must both agree before a write is allowed:
+//
+//  1. The caller's role must be writer or admin (RBAC, ctx-bound).
+//  2. The source must be explicitly marked writable in env, e.g.
+//     PG_DEV_WRITE=true (per-source kill-switch).
+//
+// admin does NOT override (2) — the per-source flag is a deployment-level
+// safety switch and keeps its meaning even for admins.
 func (d *Deps) executeWrite(ctx context.Context, args map[string]any) (string, error) {
 	src, _ := args["source"].(string)
 	q, _ := args["query"].(string)
@@ -351,11 +359,8 @@ func (d *Deps) executeWrite(ctx context.Context, args map[string]any) (string, e
 	if err != nil {
 		return "", err
 	}
-	if sr.Source.Cfg["write"] != "true" {
-		return "", fmt.Errorf(
-			"source %s is read-only; set %s%s_WRITE=true in env to enable db_execute_write",
-			sr.Source.Name, sr.Adapter.EnvPrefix(), sr.Source.Name,
-		)
+	if err := requireWrite(ctx, sr); err != nil {
+		return "", err
 	}
 	conn, err := sr.Adapter.Connect(ctx, sr.Source)
 	if err != nil {
@@ -366,6 +371,24 @@ func (d *Deps) executeWrite(ctx context.Context, args map[string]any) (string, e
 		return "", err
 	}
 	return format.ToTOONColumns("WriteResult", res.Columns, res.Rows), nil
+}
+
+// requireWrite is the single point of truth for "may this caller write to this
+// source?". Both the RBAC gate (role) and the deployment gate (source.write)
+// must pass. Future write-capable tools (e.g. a mongo write tool) should call
+// this helper instead of re-implementing the check.
+func requireWrite(ctx context.Context, sr adapters.SourceRef) error {
+	p := auth.PrincipalOf(ctx)
+	if !p.CanWrite() {
+		return fmt.Errorf("forbidden: user %s (role=%s) cannot write", p.Name, p.Role.String())
+	}
+	if sr.Source.Cfg["write"] != "true" {
+		return fmt.Errorf(
+			"source %s is read-only; set %s%s_WRITE=true in env to enable db_execute_write",
+			sr.Source.Name, sr.Adapter.EnvPrefix(), sr.Source.Name,
+		)
+	}
+	return nil
 }
 
 func (d *Deps) searchTables(_ context.Context, args map[string]any) (string, error) {

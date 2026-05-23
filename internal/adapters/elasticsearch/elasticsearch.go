@@ -11,6 +11,7 @@
 //
 //	ES_<NAME>_HOST          (alternative to URL)
 //	ES_<NAME>_PORT          (default 9200)
+//	ES_<NAME>_SCHEME        (default "http"; set "https" for TLS)
 //
 // Authentication (optional):
 //
@@ -66,6 +67,7 @@ func (a *Adapter) Discover(env map[string]string) ([]adapters.Source, error) {
 				"url":          cfg["URL"],
 				"host":         cfg["HOST"],
 				"port":         orDefault(cfg["PORT"], "9200"),
+				"scheme":       orDefault(strings.ToLower(cfg["SCHEME"]), "http"),
 				"user":         cfg["USER"],
 				"pass":         cfg["PASS"],
 				"api_key":      cfg["API_KEY"],
@@ -86,9 +88,9 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 
 	addr := src.Cfg["url"]
 	if addr == "" {
-		scheme := "http"
-		if strings.EqualFold(src.Cfg["insecure_tls"], "true") {
-			scheme = "https"
+		scheme := src.Cfg["scheme"]
+		if scheme == "" {
+			scheme = "http"
 		}
 		addr = fmt.Sprintf("%s://%s:%s", scheme, src.Cfg["host"], src.Cfg["port"])
 	}
