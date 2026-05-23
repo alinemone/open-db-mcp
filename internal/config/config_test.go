@@ -78,21 +78,6 @@ func TestParsePrincipals_IgnoresRoleEnvOnly(t *testing.T) {
 	}
 }
 
-func TestParseBool(t *testing.T) {
-	truthy := []string{"1", "true", "TRUE", "yes", "on", " true "}
-	falsy := []string{"", "0", "false", "no", "off", "anything"}
-	for _, s := range truthy {
-		if !parseBool(s) {
-			t.Errorf("parseBool(%q) = false, want true", s)
-		}
-	}
-	for _, s := range falsy {
-		if parseBool(s) {
-			t.Errorf("parseBool(%q) = true, want false", s)
-		}
-	}
-}
-
 func TestParsePrefixed_HandlesNestedKeys(t *testing.T) {
 	env := map[string]string{
 		"PG_MAIN_HOST":         "h",

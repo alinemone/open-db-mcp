@@ -10,24 +10,16 @@ type ctxKey int
 
 const principalKey ctxKey = 0
 
-// Options tweaks middleware behavior without changing the call signature.
-type Options struct {
-	// AllowQueryKey enables ?api_key= as a token source. Off by default — query
-	// strings leak into reverse-proxy logs, browser history, and Referer
-	// headers.
-	AllowQueryKey bool
-}
-
 // Middleware returns an http.Handler that rejects requests without a valid
 // token. Token sources (in order):
 //
 //   - Authorization: Bearer <token>
 //   - X-Api-Key: <token>
-//   - ?api_key=<token>     (only if Options.AllowQueryKey == true)
+//   - ?api_key=<token>
 //
 // Paths in `open` bypass the check entirely (e.g. "/health"). The matched
 // Principal is stored on the request context.
-func Middleware(principals []Principal, opts Options, open ...string) func(http.Handler) http.Handler {
+func Middleware(principals []Principal, open ...string) func(http.Handler) http.Handler {
 	openSet := map[string]struct{}{}
 	for _, p := range open {
 		openSet[p] = struct{}{}
@@ -38,7 +30,7 @@ func Middleware(principals []Principal, opts Options, open ...string) func(http.
 				next.ServeHTTP(w, r)
 				return
 			}
-			token := extract(r, opts.AllowQueryKey)
+			token := extract(r)
 			if token == "" {
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, `{"error":"unauthorized","message":"valid token required"}`, http.StatusUnauthorized)
@@ -56,17 +48,14 @@ func Middleware(principals []Principal, opts Options, open ...string) func(http.
 	}
 }
 
-func extract(r *http.Request, allowQuery bool) string {
+func extract(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(h[len("Bearer "):])
 	}
 	if h := r.Header.Get("X-Api-Key"); h != "" {
 		return strings.TrimSpace(h)
 	}
-	if allowQuery {
-		return r.URL.Query().Get("api_key")
-	}
-	return ""
+	return r.URL.Query().Get("api_key")
 }
 
 // RedactURL replaces the api_key query parameter with REDACTED so log lines

@@ -82,8 +82,7 @@ func main() {
 	go search.RefreshEvery(ctx, idx, sources, time.Hour)
 
 	// 4. HTTP server.
-	authOpts := auth.Options{AllowQueryKey: cfg.AllowQueryKey}
-	mw := auth.Middleware(cfg.Principals, authOpts, "/health", "/version")
+	mw := auth.Middleware(cfg.Principals, "/health", "/version")
 	handlerOpts := mcp.HandlerOptions{
 		CORSOrigins:   cfg.CORSOrigins,
 		VerboseErrors: cfg.LogLevel == "debug",
@@ -119,7 +118,6 @@ func main() {
 			"addr", addr,
 			"users", len(cfg.Principals),
 			"cors_origins", len(cfg.CORSOrigins),
-			"allow_query_key", cfg.AllowQueryKey,
 		)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.ErrorContext(ctx, "http server error", "err", err)

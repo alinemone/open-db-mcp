@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,9 +47,10 @@ type HandlerOptions struct {
 }
 
 // HTTPHandler returns an http.Handler that speaks the MCP Streamable HTTP
-// dialect for the methods we care about. GET /mcp returns 405 — we don't
-// upgrade to SSE; one POST = one JSON-RPC response is enough for tools/list
-// and tools/call.
+// dialect for the methods we care about. GET /mcp returns 405. POST responses
+// honor the client's Accept header: clients that include text/event-stream
+// (e.g. Claude Code) get a single SSE "message" event; everyone else gets
+// plain application/json. One request still = one response either way.
 func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setCORS(w, r, opts.CORSOrigins)
@@ -67,13 +69,13 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
 		if err != nil {
-			writeRPCError(w, nil, -32700, "parse error")
+			writeRPCError(w, r, nil, -32700, "parse error")
 			return
 		}
 
 		var req rpcRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeRPCError(w, nil, -32700, "parse error")
+			writeRPCError(w, r, nil, -32700, "parse error")
 			return
 		}
 
@@ -81,7 +83,7 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 
 		switch req.Method {
 		case "initialize":
-			writeRPCResult(w, req.ID, map[string]any{
+			writeRPCResult(w, r, req.ID, map[string]any{
 				"protocolVersion": "2024-11-05",
 				"capabilities": map[string]any{
 					"tools": map[string]any{},
@@ -93,7 +95,7 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 			})
 
 		case "tools/list":
-			writeRPCResult(w, req.ID, map[string]any{
+			writeRPCResult(w, r, req.ID, map[string]any{
 				"tools": s.ListTools(),
 			})
 
@@ -103,7 +105,7 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 				Arguments map[string]any `json:"arguments"`
 			}
 			if err := json.Unmarshal(req.Params, &p); err != nil {
-				writeRPCError(w, req.ID, -32602, "invalid params")
+				writeRPCError(w, r, req.ID, -32602, "invalid params")
 				return
 			}
 
@@ -130,7 +132,7 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 					"reason", reason,
 					"err", err.Error(),
 				)
-				writeRPCResult(w, req.ID, map[string]any{
+				writeRPCResult(w, r, req.ID, map[string]any{
 					"content": []map[string]any{{
 						"type": "text", "text": "Error: " + clientErrMsg(err, opts.VerboseErrors),
 					}},
@@ -149,7 +151,7 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 				"status", "ok",
 				"bytes", len(text),
 			)
-			writeRPCResult(w, req.ID, map[string]any{
+			writeRPCResult(w, r, req.ID, map[string]any{
 				"content": []map[string]any{{
 					"type": "text", "text": text,
 				}},
@@ -158,13 +160,13 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 		case "notifications/initialized", "notifications/cancelled", "ping":
 			// No response for notifications; respond with empty result for ping.
 			if req.Method == "ping" {
-				writeRPCResult(w, req.ID, map[string]any{})
+				writeRPCResult(w, r, req.ID, map[string]any{})
 			} else {
 				w.WriteHeader(http.StatusNoContent)
 			}
 
 		default:
-			writeRPCError(w, req.ID, -32601, "method not found: "+req.Method)
+			writeRPCError(w, r, req.ID, -32601, "method not found: "+req.Method)
 		}
 	})
 }
@@ -198,9 +200,8 @@ func setCORS(w http.ResponseWriter, r *http.Request, origins []string) {
 	w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
 }
 
-func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: id, Result: result})
+func writeRPCResult(w http.ResponseWriter, r *http.Request, id json.RawMessage, result any) {
+	writeRPC(w, r, rpcResponse{JSONRPC: "2.0", ID: id, Result: result})
 }
 
 // clientIP returns the best guess for the originating IP, preferring
@@ -218,14 +219,38 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK) // JSON-RPC errors travel as 200 with an Error field
-	_ = json.NewEncoder(w).Encode(rpcResponse{
+func writeRPCError(w http.ResponseWriter, r *http.Request, id json.RawMessage, code int, msg string) {
+	// JSON-RPC errors travel as HTTP 200 with an Error field; writeRPC writes
+	// 200 implicitly via the chosen encoder.
+	writeRPC(w, r, rpcResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error:   &rpcError{Code: code, Message: msg},
 	})
+}
+
+// writeRPC renders one JSON-RPC response. Clients whose Accept header includes
+// text/event-stream get a single SSE "message" event (Claude Code's MCP HTTP
+// client requires this); others get plain application/json.
+func writeRPC(w http.ResponseWriter, r *http.Request, resp rpcResponse) {
+	if wantsSSE(r) {
+		data, _ := json.Marshal(resp)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// wantsSSE reports whether the client's Accept header opts in to SSE.
+func wantsSSE(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 }
 
 // classifyErr labels an error for the audit log. The classification feeds

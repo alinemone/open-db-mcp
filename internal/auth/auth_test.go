@@ -48,7 +48,7 @@ func TestCanWrite(t *testing.T) {
 }
 
 func TestMiddleware_MissingToken(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{})
+	mw := Middleware(newPrincipals(t))
 	called := false
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -67,7 +67,7 @@ func TestMiddleware_MissingToken(t *testing.T) {
 }
 
 func TestMiddleware_InvalidToken(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{})
+	mw := Middleware(newPrincipals(t))
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	req := httptest.NewRequest("POST", "/mcp", nil)
@@ -81,7 +81,7 @@ func TestMiddleware_InvalidToken(t *testing.T) {
 }
 
 func TestMiddleware_ValidBearer(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{})
+	mw := Middleware(newPrincipals(t))
 	var seen Principal
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = PrincipalOf(r.Context())
@@ -101,7 +101,7 @@ func TestMiddleware_ValidBearer(t *testing.T) {
 }
 
 func TestMiddleware_ValidXApiKey(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{})
+	mw := Middleware(newPrincipals(t))
 	var seen Principal
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = PrincipalOf(r.Context())
@@ -120,21 +120,8 @@ func TestMiddleware_ValidXApiKey(t *testing.T) {
 	}
 }
 
-func TestMiddleware_QueryKey_Disabled(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{AllowQueryKey: false})
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-
-	req := httptest.NewRequest("POST", "/mcp?api_key=tok-root", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("query-key path should be denied when disabled, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_QueryKey_Enabled(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{AllowQueryKey: true})
+func TestMiddleware_QueryKey(t *testing.T) {
+	mw := Middleware(newPrincipals(t))
 	var seen Principal
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = PrincipalOf(r.Context())
@@ -153,7 +140,7 @@ func TestMiddleware_QueryKey_Enabled(t *testing.T) {
 }
 
 func TestMiddleware_OpenPath(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{}, "/health")
+	mw := Middleware(newPrincipals(t), "/health")
 	called := false
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -169,7 +156,7 @@ func TestMiddleware_OpenPath(t *testing.T) {
 }
 
 func TestMiddleware_Options(t *testing.T) {
-	mw := Middleware(newPrincipals(t), Options{})
+	mw := Middleware(newPrincipals(t))
 	called := false
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true

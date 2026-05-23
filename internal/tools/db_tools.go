@@ -419,6 +419,9 @@ func (d *Deps) searchTables(_ context.Context, args map[string]any) (string, err
 // schemaObj is a small helper that produces a JSON-schema "object" with the
 // given properties and required field list.
 func schemaObj(props map[string]any, required ...string) map[string]any {
+	if required == nil {
+		required = []string{}
+	}
 	return map[string]any{
 		"type":       "object",
 		"properties": props,

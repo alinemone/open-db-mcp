@@ -14,10 +14,6 @@ type ServerConfig struct {
 	LogLevel   string
 	TZ         string
 
-	// AllowQueryKey lets clients pass ?api_key=<token> instead of a header.
-	// Off by default — query strings leak into reverse-proxy logs.
-	AllowQueryKey bool
-
 	// CORSOrigins is the explicit allow-list emitted in
 	// Access-Control-Allow-Origin. Empty slice → no CORS header at all.
 	// A single "*" element is allowed for fully-open deployments.
@@ -44,12 +40,11 @@ type CLOGConfig struct {
 // Load reads ServerConfig from the supplied env map.
 func Load(env map[string]string) ServerConfig {
 	c := ServerConfig{
-		Port:          atoi(env["PORT"], 3000),
-		Principals:    parsePrincipals(env),
-		LogLevel:      defaultStr(env["LOG_LEVEL"], "info"),
-		TZ:            defaultStr(env["TZ"], "UTC"),
-		AllowQueryKey: parseBool(env["MCP_ALLOW_QUERY_KEY"]),
-		CORSOrigins:   splitCSV(env["MCP_CORS_ORIGINS"]),
+		Port:        atoi(env["PORT"], 3000),
+		Principals:  parsePrincipals(env),
+		LogLevel:    defaultStr(env["LOG_LEVEL"], "info"),
+		TZ:          defaultStr(env["TZ"], "UTC"),
+		CORSOrigins: splitCSV(env["MCP_CORS_ORIGINS"]),
 		CLOG: CLOGConfig{
 			ESSource:      env["CLOG_ES_SOURCE"],
 			IngressIndex:  defaultStr(env["CLOG_INGRESS_INDEX"], "logs-ingress-*"),
@@ -174,12 +169,4 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
-}
-
-func parseBool(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
 }

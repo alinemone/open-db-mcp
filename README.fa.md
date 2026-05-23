@@ -4,7 +4,7 @@
 
 🌐 **[English](./README.md)** · فارسی
 
-> یک سرور MCP برای همه‌ی دیتابیس‌ها. فقط `.env` رو پر کن و `docker compose up` بزن — هر LLM ای (Claude، Codex، Gemini، Cursor، Windsurf) می‌تونه PostgreSQL، MySQL، ClickHouse، MongoDB، Redis، SQLite و Elasticsearch تو رو بخونه.
+> یک سرور MCP برای همه‌ی دیتابیس‌ها. کافیه یه فایل `.env` رو ویرایش کنی و `docker compose up` بزنی — اون‌وقت Claude / Codex / Gemini / Cursor / Windsurf می‌تونن PostgreSQL، MySQL، ClickHouse، MongoDB، Redis، SQLite و Elasticsearch تو رو بخونن.
 
 <p align="left" dir="ltr">
   <a href="https://github.com/alinemone/open-db-mcp/actions"><img alt="build" src="https://img.shields.io/github/actions/workflow/status/alinemone/open-db-mcp/ci.yml?branch=main"></a>
@@ -14,71 +14,138 @@
   <img alt="mcp" src="https://img.shields.io/badge/MCP-Streamable_HTTP-5C2D91">
 </p>
 
-`open-db-mcp` یک سرور خود-میزبان **[Model Context Protocol (MCP)](https://modelcontextprotocol.io)** نوشته‌شده با **Go** است که هر دیتابیسی رو که بهش دسترسی داری، تبدیل به ابزاری می‌کنه که LLM ها می‌تونن صدا بزنن. فقط یه خط در `.env` اضافه کن — بدون تغییر در کد — و Claude/Codex/Gemini/Cursor می‌تونن بلافاصله schema ها رو ببینن، table ها رو بررسی کنن، column ها رو جستجو کنن، نمونه‌داده بگیرن، و SQL فقط-خواندنی روی همه‌ی منابع اجرا کنن.
+`open-db-mcp` یک سرور خود-میزبان **[Model Context Protocol (MCP)](https://modelcontextprotocol.io)** نوشته‌شده با **Go** است که هر دیتابیسی رو که بهش دسترسی داری، تبدیل به ابزاری می‌کنه که LLM ها (Claude، Codex، Gemini، Cursor و…) می‌تونن صدا بزنن. هیچ تغییری تو کد لازم نیست — همه‌چیز فقط با ویرایش `.env` انجام می‌شه.
 
 ---
 
-## چرا open-db-mcp؟
+## چی به دست میاری
 
-- 🔌 **اضافه کردن دیتابیس بدون کدنویسی** — متغیرهای محیطی با prefix درست (`PG_`, `MYSQL_`, `CH_`, `MONGO_`, `REDIS_`, `SQLITE_`, `ES_`) رو بذار، restart کن، تمام.
-- 🧩 **معماری plugin-per-database** — یک فایل Go برای هر خانواده‌ی دیتابیس. اضافه کردن DuckDB / Snowflake / Cassandra یک PR یک‌فایلی است.
-- 🛡️ **فقط-خواندنی به‌صورت پیش‌فرض** — `db_execute_query` در زمان parse، دستورات `INSERT/UPDATE/DELETE/DROP/ALTER` رو رد می‌کنه. می‌تونی به production هم وصلش کنی. برای write یک ابزار جداگانه به اسم `db_execute_write` هست که فقط روی منابعی کار می‌کنه که صریحاً `*_WRITE=true` دارن.
-- 🐳 **Docker image کوچک** — مبتنی بر Alpine، حدود ۱۲ مگابایت. زیر یک ثانیه بالا میاد.
-- ⚡ **Streamable HTTP** — مستقیم با **Claude Desktop**، **Claude Code**، **Codex**، **Gemini**، **Cursor**، **Windsurf**، **Zed**، **Continue**، **Cline** و هر چیزی که MCP HTTP بفهمه کار می‌کنه.
-- 🔑 **کلید API به ازای هر کاربر همراه نقش** — `MCP_USER_<NAME>=<token>` + `MCP_USER_<NAME>_ROLE=reader|writer|admin`. می‌تونی توکن reader به تحلیل‌گرها بدی، writer به محیط dev، و admin به خودت. مقایسهٔ توکن constant-time؛ توکن خام هرگز از env بیرون نمیاد.
-- 📦 **خروجی TOON-encoded** — فرمت فشرده و token-friendly که می‌ذاره LLM ردیف‌های بیشتری در همون context ببینه.
-- 🐘🐬🟦🍃🟥🔵🔍 **یک سرور، چندین دیتابیس** — PostgreSQL، MySQL/MariaDB، ClickHouse، MongoDB، Redis، SQLite، Elasticsearch (به‌علاوه پروفایل اختیاری CLOG برای تحلیل لاگ‌های Kubernetes).
-
----
-
-## دیتابیس‌های پشتیبانی‌شده
+- 🔌 **اضافه کردن دیتابیس فقط با چند خط env.** بدون نوشتن کد، بدون نصب پلاگین.
+- 🛡️ **به‌صورت پیش‌فرض فقط-خواندنی** — می‌تونی با خیال راحت به production هم وصلش کنی.
+- 🐳 **Docker image کوچیک** (~۱۲ مگابایت، مبتنی بر Alpine). زیر یک ثانیه بالا میاد.
+- ⚡ **با همه‌ی کلاینت‌های MCP کار می‌کنه** — Claude Desktop، Claude Code، Codex، Gemini CLI، Cursor، Windsurf، Zed، Continue، Cline.
+- 🔑 **توکن مجزا برای هر کاربر همراه نقش** (reader / writer / admin).
+- 🐘🐬🟦🍃🟥🔵🔍 **دیتابیس‌های پشتیبانی‌شده:** PostgreSQL · MySQL/MariaDB · ClickHouse · MongoDB · Redis · SQLite · Elasticsearch.
 
 <div dir="ltr">
 
-| Family                  | Env prefix | Generic SQL tools | Native tools                                    |
-|-------------------------|-----------|-------------------|-------------------------------------------------|
-| **PostgreSQL**          | `PG_`     | ✅ full           | FK discovery, indexes                          |
-| **MySQL / MariaDB**     | `MYSQL_`  | ✅ full           | FK discovery, indexes                          |
-| **ClickHouse**          | `CH_`     | ✅ OLAP-aware     | Table engines, partitions                      |
-| **MongoDB**             | `MONGO_`  | listing only      | `mongo_find`, `mongo_aggregate`                |
-| **Redis**               | `REDIS_`  | —                 | `redis_keys`, `redis_get`, `redis_info`        |
-| **SQLite**              | `SQLITE_` | ✅ full           | embedded; FK PRAGMA                            |
-| **Elasticsearch**       | `ES_`     | indices listing   | `es_list_indices`, `es_field_caps`, `es_search`|
-| **CLOG (k8s logs)**     | `CLOG_*`  | —                 | namespace/container log search                 |
+| Family              | Env prefix | What you can do                                 |
+|---------------------|------------|-------------------------------------------------|
+| **PostgreSQL**      | `PG_`      | full SQL, schema/index/FK introspection         |
+| **MySQL / MariaDB** | `MYSQL_`   | full SQL, schema/index/FK introspection         |
+| **ClickHouse**      | `CH_`      | full SQL, OLAP-aware, engines & partitions      |
+| **MongoDB**         | `MONGO_`   | `mongo_find`, `mongo_aggregate`, collection list|
+| **Redis**           | `REDIS_`   | `redis_keys`, `redis_get`, `redis_info`         |
+| **SQLite**          | `SQLITE_`  | full SQL on a file path                         |
+| **Elasticsearch**   | `ES_`      | list indices, field caps, raw DSL search        |
+| **CLOG (k8s logs)** | `CLOG_*`   | namespace/container log search (opt-in)         |
 
 </div>
 
-> می‌خوای **DuckDB**, **Snowflake**, **BigQuery**, **Cassandra**, **MSSQL** اضافه بشه؟ Issue باز کن یا PR بفرست — اضافه کردن adapter جدید فقط یک فایل Go است. [CONTRIBUTING.md](./CONTRIBUTING.md) رو ببین.
-
 ---
 
-## شروع سریع
+## در ۵ دقیقه بالا بیار
+
+فقط به **Docker** و **Docker Compose** نیاز داری. تمام.
+
+### قدم ۱ — مخزن رو کلون کن
 
 <div dir="ltr">
 
 ```bash
 git clone https://github.com/alinemone/open-db-mcp.git
 cd open-db-mcp
-cp .env.example .env             # PG_*, MYSQL_*, … رو پر کن
-docker compose up -d
-curl http://localhost:3000/health
+cp .env.example .env
 ```
 
 </div>
 
-به MCP client ت وصلش کن:
+### قدم ۲ — فایل `.env` رو ویرایش کن
+
+فایل `.env` رو با هر ادیتوری باز کن. اول از همه یک خط توکن می‌بینی — **این همون رمزیه که کلاینت AI با اون به سرور وصل می‌شه.** عبارت `changeme` رو با یه چیزی که فقط خودت می‌دونی عوض کن:
 
 <div dir="ltr">
 
-```jsonc
-// Claude Desktop / Codex / Gemini / Cursor / Windsurf / Continue / Zed
+```env
+MCP_USER_ADMIN=my-secret-token-123
+MCP_USER_ADMIN_ROLE=admin
+```
+
+</div>
+
+حالا پایین‌تر برو و **یکی از بلاک‌های دیتابیس رو از حالت کامنت در بیار.** این هم یک مثال کامل برای PostgreSQL — فقط `#` ابتدای خط‌ها رو حذف کن و مقادیر واقعی خودت رو بذار:
+
+<div dir="ltr">
+
+```env
+PG_MAIN_HOST=host.docker.internal     # آدرس دیتابیس (پایین توضیح هست)
+PG_MAIN_PORT=5432
+PG_MAIN_USER=postgres
+PG_MAIN_PASS=your-postgres-password
+PG_MAIN_DB=your_database_name
+```
+
+</div>
+
+> **تو `HOST` چی بنویسم؟**
+> - دیتابیس روی **همین لپ‌تاپ** ولی بیرون از Docker است → `host.docker.internal`
+> - دیتابیس تو **یه کانتینر Docker دیگه** روی همین ماشینه → اسم اون کانتینر (مثل `postgres`). فقط حواست باشه که دو کانتینر تو یه شبکه باشن.
+> - دیتابیس روی **سرور دیگه‌ای** هست → IP یا hostname‌ش (مثل `db.example.com`).
+
+کلمه‌ی `MAIN` تو `PG_MAIN_*` فقط یه اسمه که خودت انتخاب می‌کنی — این سورس بعداً با همون اسم `MAIN` نمایش داده می‌شه. اگه Postgres دوم داری، یه بلاک دیگه با اسم متفاوت بساز (مثلاً `PG_ANALYTICS_*`).
+
+### قدم ۳ — سرور رو بالا بیار
+
+<div dir="ltr">
+
+```bash
+docker compose up -d
+```
+
+</div>
+
+مطمئن شو که داره کار می‌کنه:
+
+<div dir="ltr">
+
+```bash
+curl http://localhost:3000/health
+# {"status":"healthy"}
+```
+
+</div>
+
+اگه می‌خوای روی پورت دیگه‌ای باشه، تو `.env` بنویس `PORT=3001` و دوباره `docker compose up -d` بزن.
+
+### قدم ۴ — کلاینت AI رو وصل کن
+
+کلاینت خودت رو از پایین انتخاب کن. به‌جای `my-secret-token-123` همون چیزی که تو `MCP_USER_ADMIN` گذاشتی رو بذار.
+
+#### Claude Code (CLI)
+
+<div dir="ltr">
+
+```bash
+claude mcp add open-db \
+  --transport http \
+  --url "http://localhost:3000/mcp?api_key=my-secret-token-123"
+```
+
+</div>
+
+با `claude mcp list` چک کن که اضافه شده باشه.
+
+#### Claude Desktop
+
+فایل `claude_desktop_config.json` رو ویرایش کن (macOS: `~/Library/Application Support/Claude/`، Windows: `%APPDATA%\Claude\`، Linux: `~/.config/Claude/`):
+
+<div dir="ltr">
+
+```json
 {
   "mcpServers": {
     "open-db": {
-      "url": "http://localhost:3000/mcp",
-      "headers": {
-        "Authorization": "Bearer changeme"
-      }
+      "url": "http://localhost:3000/mcp?api_key=my-secret-token-123"
     }
   }
 }
@@ -86,67 +153,180 @@ curl http://localhost:3000/health
 
 </div>
 
-> توکن به‌صورت پیش‌فرض از طریق هدر `Authorization` (یا `X-Api-Key`) منتقل می‌شه.
-> اگر کلاینت‌ت قابلیت ارسال هدر سفارشی نداره، `MCP_ALLOW_QUERY_KEY=true` رو
-> در `.env` ست کن تا روش قدیمی `?api_key=` فعال بشه.
+Claude Desktop رو ری‌استارت کن.
 
-بعد از مدل بپرس: *«همه‌ی دیتابیس‌هام رو لیست کن و ۵ تا بزرگ‌ترین جدول هرکدوم رو نشون بده»*. خودش zincir می‌کنه `db_list_sources` → `db_list_tables` → `db_table_card`.
+#### Cursor
 
-> 📖 راهنمای کامل کلاینت‌ها: [docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)
-
----
-
-## اضافه کردن چندین دیتابیس از یک نوع
-
-می‌خوای ۳ تا Postgres، ۲ تا MySQL، و یه ClickHouse داشته باشی؟
+از مسیر *Settings → Cursor Settings → MCP → Add new MCP Server*:
 
 <div dir="ltr">
 
-```env
-PG_MAIN_HOST=10.0.0.1       PG_ANALYTICS_HOST=10.0.0.2   PG_BILLING_HOST=10.0.0.3
-PG_MAIN_USER=postgres       PG_ANALYTICS_USER=postgres   PG_BILLING_USER=postgres
-PG_MAIN_PASS=...            PG_ANALYTICS_PASS=...        PG_BILLING_PASS=...
-PG_MAIN_DB=app              PG_ANALYTICS_DB=warehouse    PG_BILLING_DB=billing
-
-MYSQL_CRM_HOST=10.0.0.4     MYSQL_LEGACY_HOST=10.0.0.5
-CH_OLAP_HOST=10.0.0.6
+```json
+{
+  "open-db": {
+    "url": "http://localhost:3000/mcp?api_key=my-secret-token-123"
+  }
+}
 ```
 
 </div>
 
-سپس `db_list_sources` هر شش‌تا رو برمی‌گردونه و LLM می‌تونه با اسم ارجاع بده.
+> 📖 **کلاینت‌های دیگه** (Codex، Gemini، Windsurf، Continue، Zed، Cline) رو تو [docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md) ببین.
+
+### قدم ۵ — از مدل یه چیزی بپرس
+
+این‌ها رو امتحان کن:
+
+- *«همه‌ی دیتابیس‌هام رو لیست کن.»*
+- *«۵ تا بزرگ‌ترین جدول تو دیتابیس MAIN رو نشون بده.»*
+- *«جدول `users` چه ستون‌هایی داره؟»*
+- *«۳ تا نمونه ردیف از جدول `orders` نشون بده.»*
+
+مدل خودش ابزارهای درست (`db_list_sources` → `db_list_tables` → `db_table_card` → `db_execute_query`) رو پشت سر هم صدا می‌زنه.
 
 ---
 
-## احراز هویت و نقش‌ها (کاربرها)
+## اضافه کردن دیتابیس دوم
 
-هر کاربر احراز هویت‌شده یک نقش داره. **ابزارهای read** برای هر توکن معتبری محدودیتی ندارن؛ ولی **write به دو گارد مستقل نیاز داره** که هر دو باید پاس شن:
+فقط یه بلاک دیگه اضافه کن. الگوش `<PREFIX>_<NAME>_<KEY>` ـه — `<NAME>` هر اسمی که می‌خوای برای این سورس بذاری.
 
-1. نقش کاربر `writer` یا `admin` باشه (در env به ازای هر کاربر تعریف می‌شه).
-2. منبع به‌طور صریح writable علامت‌گذاری شده باشه (`PG_<NAME>_WRITE=true` و مانند آن).
-
-نقش `admin` کلید قطع‌کنندهٔ سطح منبع رو **دور نمی‌زنه** — اون فلگ یک گارد deployment‌ست، نه یک سطح دسترسی.
+**دو تا Postgres و یه MySQL:**
 
 <div dir="ltr">
 
 ```env
-MCP_USER_ADMIN=tok-admin
-MCP_USER_ADMIN_ROLE=admin           # روی هر منبع WRITE=true می‌تونه بنویسه
+PG_MAIN_HOST=10.0.0.1
+PG_MAIN_USER=postgres
+PG_MAIN_PASS=secret1
+PG_MAIN_DB=app
 
-MCP_USER_DEV=tok-dev
-MCP_USER_DEV_ROLE=writer            # روی منابع writable می‌تونه بنویسه
+PG_ANALYTICS_HOST=10.0.0.2
+PG_ANALYTICS_USER=postgres
+PG_ANALYTICS_PASS=secret2
+PG_ANALYTICS_DB=warehouse
 
-MCP_USER_ALI=tok-ali                # نقش پیش‌فرض reader است؛ فقط خواندن
-
-PG_DEV_HOST=...                     # writable: dev/admin می‌تونن تغییر بدن
-PG_DEV_WRITE=true
-
-PG_PROD_HOST=...                    # NOT writable: حتی admin هم خطای read-only می‌گیره
+MYSQL_CRM_HOST=10.0.0.3
+MYSQL_CRM_USER=root
+MYSQL_CRM_PASS=secret3
+MYSQL_CRM_DB=crm
 ```
 
 </div>
 
-ماتریس رفتار:
+ری‌استارت کن با `docker compose up -d`. حالا `db_list_sources` هر سه‌تا (`MAIN`، `ANALYTICS`، `CRM`) رو نشون می‌ده.
+
+### بقیه‌ی خانواده‌های دیتابیس
+
+<div dir="ltr">
+
+```env
+# ClickHouse
+CH_OLAP_HOST=10.0.0.4
+CH_OLAP_PORT=9000
+CH_OLAP_USER=default
+CH_OLAP_PASS=
+CH_OLAP_DB=default
+
+# MongoDB (با URI)
+MONGO_LOGS_URI=mongodb://user:pass@host:27017/dbname
+
+# Redis (با URL)
+REDIS_CACHE_URL=redis://:password@host:6379/0
+
+# SQLite (مسیر داخل کانتینر)
+SQLITE_LOCAL_PATH=/data/app.db
+
+# Elasticsearch
+ES_LOGS_URL=https://elastic.example.com:9200
+ES_LOGS_API_KEY=BASE64_ID_AND_KEY
+```
+
+</div>
+
+مرجع کامل همه‌ی متغیرها تو [.env.example](./.env.example) هست.
+
+---
+
+## ابزارهای MCP موجود
+
+**عمومی (روی همه‌ی منابع SQL-مانند):**
+
+- `db_list_sources` · `db_list_schemas` · `db_list_tables` · `db_list_columns`
+- `db_table_card` · `db_table_card_full` — ستون‌ها + آمار + نمونه‌داده + ایندکس‌ها + FK ها
+- `db_find_relationships` — روابط PK/FK
+- `db_execute_query` — SQL فقط-خواندنی، خروجی TOON
+- `db_execute_write` — SQL نوشتنی (اختیاری، به ازای هر سورس — پایین توضیح هست)
+- `search_tables` — جست‌وجوی fuzzy تو جدول/ستون‌های همه‌ی سورس‌ها
+
+**اختصاصی هر دیتابیس:**
+
+- **MongoDB** — `mongo_list_collections`, `mongo_find`, `mongo_aggregate`
+- **Redis** — `redis_keys`, `redis_get`, `redis_info`
+- **Elasticsearch** — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
+- **CLOG** (اختیاری) — `clog_profile`, `clog_container_logs`
+
+---
+
+## تنظیمات رایجی که شاید بخوای عوض کنی
+
+### عوض کردن پورت
+
+<div dir="ltr">
+
+```env
+PORT=3001
+```
+
+</div>
+
+بعد `docker compose up -d` بزن. URL ای که کلاینت AI استفاده می‌کنه می‌شه `http://localhost:3001/mcp?api_key=...`.
+
+### اضافه کردن کاربرهای بیشتر (توکن متفاوت)
+
+هر خط `MCP_USER_<NAME>` یه توکن می‌سازه. اگه نقش رو ننویسی، پیش‌فرض `reader` هست:
+
+<div dir="ltr">
+
+```env
+MCP_USER_ADMIN=my-secret-token-123
+MCP_USER_ADMIN_ROLE=admin
+
+MCP_USER_ALI=ali-token-456          # نقش پیش‌فرض reader → فقط خواندنی
+MCP_USER_DEV=dev-token-789
+MCP_USER_DEV_ROLE=writer            # روی سورس‌های writable می‌تونه بنویسه
+```
+
+</div>
+
+توکن `ALI` رو به کسی بده که فقط باید بخونه؛ توکن `ADMIN` رو برای خودت نگه دار.
+
+### فعال کردن write روی یه سورس خاص (اختیاری)
+
+به‌صورت پیش‌فرض **همه‌ی سورس‌ها فقط-خواندنی هستن.** برای اینکه `db_execute_write` روی یه سورس کار کنه، `_WRITE=true` بذار:
+
+<div dir="ltr">
+
+```env
+PG_DEV_HOST=host.docker.internal
+PG_DEV_WRITE=true            # ← این سورس writable می‌شه
+```
+
+</div>
+
+کاربر صدا‌زننده هم باید نقش `writer` یا `admin` داشته باشه. هر دو شرط باید با هم برقرار باشن — حتی `admin` هم نمی‌تونه روی سورسی که `_WRITE` ندارن چیزی بنویسه. این یک گارد عمدیه: یک کلید قطع‌کننده‌ی سطح deployment.
+
+> 💡 برای production بهتره `WRITE=false` بمونه و تو خود دیتابیس یه user بسازی که فقط `SELECT` grant داره. این بهت دفاع دولایه می‌ده.
+
+---
+
+## بخش پیشرفته
+
+### مدل احراز هویت
+
+هر کاربر یک نقش داره. **خواندن‌ها** برای هر توکن معتبر بدون محدودیت‌ه. **نوشتن** نیاز به *دو* گارد مستقل داره:
+
+1. نقش کاربر `writer` یا `admin` باشه.
+2. سورس writable علامت‌گذاری شده باشه (`<PREFIX>_<NAME>_WRITE=true`).
 
 <div dir="ltr">
 
@@ -160,74 +340,19 @@ PG_PROD_HOST=...                    # NOT writable: حتی admin هم خطای r
 
 </div>
 
-هر فراخوانی audit-log می‌شه با فیلدهای `user`، `role`، `source`، `tool`، `duration_ms` و در صورت deny فیلد `reason`. مقایسهٔ توکن constant-time هست؛ توکن خام در حافظه با sha256 hash می‌شه.
+هر فراخوانی audit-log می‌شه با فیلدهای `user`، `role`، `source`، `tool`، `duration_ms` و در صورت رد، فیلد `reason`. مقایسه‌ی توکن constant-time هست و توکن خام تو حافظه با sha256 hash می‌شه.
 
-> **نکته:** برای دفاع دولایه، علاوه بر این گاردها، در سطح دیتابیس هم یک user با فقط grant `SELECT` بساز برای منابع read-only و یک user جداگانه با grant write برای منابع writable.
+### چطور فقط-خواندنی بودن تضمین می‌شه
 
----
+سه لایه‌ی مستقل روی هم نشسته‌ان:
 
-## ابزارهای MCP موجود
+1. **گارد سطح Statement** — `db_execute_query` هر دستوری غیر از `SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` رو در زمان parse رد می‌کنه.
+2. **read-only در سطح driver** — Postgres تراکنش read-only باز می‌کنه؛ SQLite `query_only` رو فعال می‌کنه؛ MySQL خواندن رو تو `READ ONLY` transaction می‌پیچه؛ ClickHouse با `readonly=2` کار می‌کنه.
+3. **RBAC** — نوشتن علاوه بر بقیه نیاز به نقش `writer` یا بالاتر داره (بالا توضیح دادیم).
 
-**عمومی (روی همه‌ی منابع SQL-like کار می‌کنن):**
+MongoDB / Redis / Elasticsearch ابزارهای اختصاصی خودشون رو دارن (`mongo_*`، `redis_*`، `es_*`) و از مسیر `db_execute_*` رد نمی‌شن. `mongo_find` و `mongo_aggregate` هم اپراتورهای `$out`, `$merge`, `$function`, `$accumulator`, `$where`, `$eval` رو رد می‌کنن.
 
-- `db_list_sources` · `db_list_schemas` · `db_list_tables` · `db_list_columns`
-- `db_table_card` · `db_table_card_full` (column ها + آمار + نمونه‌داده + index ها + FK ها)
-- `db_find_relationships` (روابط PK/FK)
-- `db_execute_query` (فقط-خواندنی، خروجی TOON)
-- `db_execute_write` (write اختیاری — فقط روی منابعی که `<DB>_<NAME>_WRITE=true` دارن. پیش‌فرض خاموش)
-- `search_tables` (جستجوی fuzzy روی جدول/ستون‌های همه‌ی منابع)
-
-**اختصاصی هر دیتابیس:**
-
-- MongoDB — `mongo_list_collections`, `mongo_find`, `mongo_aggregate`
-- Redis — `redis_keys`, `redis_get`, `redis_info`
-- Elasticsearch — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
-- CLOG (اختیاری) — `clog_profile`, `clog_container_logs`
-
----
-
-## Write mode (اختیاری، به ازای هر منبع)
-
-به‌صورت پیش‌فرض **همه‌ی منابع فقط-خواندنی هستن**. سه لایه روی هم نشسته‌ان تا همین‌طور بمونه:
-
-1. **گارد statement** — `db_execute_query` هر دستوری غیر از `SELECT/WITH/EXPLAIN/SHOW/DESCRIBE` رو در زمان parse رد می‌کنه.
-2. **read-only در سطح driver** — Postgres یک تراکنش read-only باز می‌کنه، SQLite با pragma `query_only` کار می‌کنه، MySQL خواندن رو در یک تراکنش `READ ONLY` بسته‌بندی می‌کنه و ClickHouse برای آن کوئری `readonly=2` رو فعال می‌کنه.
-3. **RBAC** — write علاوه‌بر این موارد، نیاز به نقش `writer` یا بالاتر داره (به بخش [احراز هویت و نقش‌ها](#احراز-هویت-و-نقش‌ها-کاربرها) مراجعه کن).
-
-برای فعال‌سازی write روی یک منبع خاص، `<PREFIX>_<NAME>_WRITE=true` رو ست کن:
-
-<div dir="ltr">
-
-```env
-PG_DEV_HOST=host.docker.internal
-PG_DEV_WRITE=true            # ← فقط این منبع writable می‌شه
-
-MYSQL_LOCAL_WRITE=true       # برای MySQL
-CH_PLAYGROUND_WRITE=true     # برای ClickHouse
-SQLITE_SCRATCH_WRITE=true    # برای SQLite (pragma query_only حذف می‌شه)
-```
-
-</div>
-
-ابزار `db_execute_write` تا وقتی هم منبع writable نشده **هم** نقش کاربر writer/admin نباشه اجرا نمی‌شه:
-
-<div dir="ltr">
-
-```
-Error: forbidden: user ali (role=reader) cannot write
-Error: source PROD is read-only;
-       set PG_PROD_WRITE=true in env to enable db_execute_write
-```
-
-</div>
-
-این رفتار به‌صورت یک‌دست در **PostgreSQL · MySQL · ClickHouse · SQLite** اعمال می‌شه. MongoDB / Redis / Elasticsearch ابزارهای اختصاصی خودشون (`mongo_*`، `redis_*`، `es_*`) رو دارن و از مسیر `db_execute_*` رد نمی‌شن. ابزارهای `mongo_find` و `mongo_aggregate` هم operatorهای `$out`, `$merge`, `$function`, `$accumulator`, `$where` و `$eval` رو رد می‌کنن تا واقعاً read-only بمونن.
-
-> 💡 در production بهتره `WRITE` خاموش بمونه و از DB user ای استفاده کنی که فقط grant `SELECT` داره — این بهت دفاع دولایه می‌ده.
-
----
-
-## معماری
+### معماری
 
 <div dir="ltr">
 
@@ -249,7 +374,7 @@ Error: source PROD is read-only;
 
 </div>
 
-هر `internal/adapters/<dbname>/<dbname>.go` خودکفا است: discovery، connection pool، schema introspection، اجرای query. اضافه کردن خانواده‌ی جدید یعنی یک فایل و یک blank import.
+هر فایل `internal/adapters/<dbname>/<dbname>.go` خودکفاست: discovery، connection pool، schema introspection، اجرای query. اضافه کردن خانواده‌ی جدید یعنی یک فایل و یک blank import.
 
 ---
 
@@ -272,9 +397,11 @@ Error: source PROD is read-only;
 
 ## مستندات
 
-- **[docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)** — راهنمای ست‌آپ برای هر کلاینت محبوب MCP
+- **[docs/MCP_CLIENTS.md](./docs/MCP_CLIENTS.md)** — راهنمای کامل تنظیم برای هر کلاینت محبوب MCP
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — نحوه‌ی اضافه کردن adapter جدید (یک فایل، حدود ۱۵۰ خط کد)
 - **[.env.example](./.env.example)** — مرجع کامل متغیرهای محیطی با توضیحات
+
+می‌خوای **DuckDB / Snowflake / BigQuery / Cassandra / MSSQL** اضافه بشه؟ یه Issue باز کن یا PR بفرست — [CONTRIBUTING.md](./CONTRIBUTING.md) رو ببین.
 
 ---
 
