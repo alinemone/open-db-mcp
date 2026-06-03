@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/open-db-mcp/open-db-mcp/internal/adapters"
@@ -344,6 +345,32 @@ func (c *conn) FindRelationships(ctx context.Context, schema, table string) ([]a
 	return out, rows.Err()
 }
 
+// sqlError converts an error from query execution into a user-actionable,
+// safe-to-return error. Errors raised by Postgres about the *query itself*
+// (syntax, undefined column, statement timeout, etc.) are written by the user
+// and leak no infrastructure detail, so we surface them verbatim behind a
+// stable "sql error" prefix (whitelisted in transport.clientErrMsg). The 5m
+// context deadline is reported as an explicit timeout. Anything else
+// (connection failures, driver internals) is returned unchanged and collapses
+// to a generic message upstream.
+func sqlError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		// 57014 = query_canceled (most often statement_timeout).
+		if pg.Code == "57014" {
+			return fmt.Errorf("sql error [57014]: query canceled — likely statement timeout; narrow the scan (push WHERE/id filters inside heavy CTEs) or add LIMIT")
+		}
+		return fmt.Errorf("sql error [%s]: %s", pg.Code, pg.Message)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("sql error: query exceeded the 5m execution limit — narrow the scan (push WHERE/id filters inside heavy CTEs) or add LIMIT")
+	}
+	return err
+}
+
 func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.QueryResult, error) {
 	if !q.Write {
 		if err := adapters.AssertReadOnly(q.SQL); err != nil {
@@ -374,10 +401,10 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 	if q.Write && !looksLikeSelect(q.SQL) {
 		tag, err := tx.Exec(ctx, q.SQL)
 		if err != nil {
-			return adapters.QueryResult{}, err
+			return adapters.QueryResult{}, sqlError(err)
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return adapters.QueryResult{}, err
+			return adapters.QueryResult{}, sqlError(err)
 		}
 		committed = true
 		return adapters.QueryResult{
@@ -389,7 +416,7 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 
 	rows, err := tx.Query(ctx, q.SQL)
 	if err != nil {
-		return adapters.QueryResult{}, err
+		return adapters.QueryResult{}, sqlError(err)
 	}
 	defer rows.Close()
 
@@ -402,16 +429,16 @@ func (c *conn) ExecuteQuery(ctx context.Context, q adapters.Query) (adapters.Que
 	for rows.Next() {
 		vals, err := rows.Values()
 		if err != nil {
-			return adapters.QueryResult{}, err
+			return adapters.QueryResult{}, sqlError(err)
 		}
 		data = append(data, vals)
 	}
 	if err := rows.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		return adapters.QueryResult{}, err
+		return adapters.QueryResult{}, sqlError(err)
 	}
 	if q.Write {
 		if err := tx.Commit(ctx); err != nil {
-			return adapters.QueryResult{}, err
+			return adapters.QueryResult{}, sqlError(err)
 		}
 		committed = true
 	}

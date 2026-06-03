@@ -267,6 +267,8 @@ func classifyErr(err error) string {
 		return "not_found"
 	case strings.Contains(msg, "read-only"):
 		return "readonly"
+	case strings.HasPrefix(msg, "sql error"):
+		return "query_error"
 	default:
 		return "error"
 	}
@@ -304,6 +306,7 @@ func userVisible(msg string) bool {
 		"unsupported type",
 		"query must start with",
 		"empty query",
+		"sql error", // DB-side query errors (syntax, timeout 57014, etc.) — written by the user, safe & actionable
 		"destructive keyword",
 		"empty identifier",
 		"identifier too long",
