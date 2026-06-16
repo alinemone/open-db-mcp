@@ -111,6 +111,7 @@ Edit `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/
 {
   "mcpServers": {
     "open-db": {
+      "type": "http",
       "url": "http://localhost:3000/mcp?api_key=my-secret-token-123"
     }
   }
@@ -126,6 +127,7 @@ Restart Claude Desktop.
 ```json
 {
   "open-db": {
+    "type": "http",
     "url": "http://localhost:3000/mcp?api_key=my-secret-token-123"
   }
 }
