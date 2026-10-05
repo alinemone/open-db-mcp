@@ -53,7 +53,7 @@ cp .env.example .env
 Open `.env` in any editor. At the top you'll see a token line — **this is the secret your AI client will use to call the server.** Change `changeme` to something only you know:
 
 ```env
-MCP_USER_ADMIN=my-secret-token-123
+MCP_USER_ADMIN_TOKEN=my-secret-token-123
 MCP_USER_ADMIN_ROLE=admin
 ```
 
@@ -63,7 +63,7 @@ Now scroll down and **uncomment one database block.** Here's a complete PostgreS
 PG_MAIN_HOST=host.docker.internal     # your DB host (see notes below)
 PG_MAIN_PORT=5432
 PG_MAIN_USER=postgres
-PG_MAIN_PASS=your-postgres-password
+PG_MAIN_PASSWORD=your-postgres-password
 PG_MAIN_DB=your_database_name
 ```
 
@@ -91,7 +91,7 @@ If you want it on a different port, set `PORT=3001` in `.env` and run `docker co
 
 ### Step 4 — Connect your AI client
 
-Pick your client below. Replace `my-secret-token-123` with whatever you put in `MCP_USER_ADMIN`.
+Pick your client below. Replace `my-secret-token-123` with whatever you put in `MCP_USER_ADMIN_TOKEN`.
 
 #### Claude Code (CLI)
 
@@ -157,17 +157,17 @@ Just add another block. The pattern is `<PREFIX>_<NAME>_<KEY>` — `<NAME>` is w
 ```env
 PG_MAIN_HOST=10.0.0.1
 PG_MAIN_USER=postgres
-PG_MAIN_PASS=secret1
+PG_MAIN_PASSWORD=secret1
 PG_MAIN_DB=app
 
 PG_ANALYTICS_HOST=10.0.0.2
 PG_ANALYTICS_USER=postgres
-PG_ANALYTICS_PASS=secret2
+PG_ANALYTICS_PASSWORD=secret2
 PG_ANALYTICS_DB=warehouse
 
 MYSQL_CRM_HOST=10.0.0.3
 MYSQL_CRM_USER=root
-MYSQL_CRM_PASS=secret3
+MYSQL_CRM_PASSWORD=secret3
 MYSQL_CRM_DB=crm
 ```
 
@@ -180,7 +180,7 @@ Restart with `docker compose up -d`. `db_list_sources` will now show `MAIN`, `AN
 CH_OLAP_HOST=10.0.0.4
 CH_OLAP_PORT=9000
 CH_OLAP_USER=default
-CH_OLAP_PASS=
+CH_OLAP_PASSWORD=
 CH_OLAP_DB=default
 
 # MongoDB (URI form)
@@ -233,14 +233,14 @@ Then restart: `docker compose up -d`. The URL your AI client uses becomes `http:
 
 ### Add more users (with different tokens)
 
-Each `MCP_USER_<NAME>` line creates a token. The role defaults to `reader` if you don't say otherwise:
+Each `MCP_USER_<NAME>_TOKEN` line creates a token. The role defaults to `reader` if you don't say otherwise:
 
 ```env
-MCP_USER_ADMIN=my-secret-token-123
+MCP_USER_ADMIN_TOKEN=my-secret-token-123
 MCP_USER_ADMIN_ROLE=admin
 
-MCP_USER_ALI=ali-token-456          # role is "reader" by default → read-only
-MCP_USER_DEV=dev-token-789
+MCP_USER_ALI_TOKEN=ali-token-456          # role is "reader" by default → read-only
+MCP_USER_DEV_TOKEN=dev-token-789
 MCP_USER_DEV_ROLE=writer            # can run db_execute_write on writable sources
 ```
 
@@ -248,14 +248,14 @@ Hand the `ALI` token to someone who should only read; keep the `ADMIN` one for y
 
 ### Allow writes on a specific source (opt-in)
 
-By default **every source is read-only.** To let `db_execute_write` work on one source, add `_WRITE=true`:
+By default **every source is read-only.** To let `db_execute_write` work on one source, add `_ALLOW_WRITE=true`:
 
 ```env
 PG_DEV_HOST=host.docker.internal
-PG_DEV_WRITE=true            # ← this source becomes writable
+PG_DEV_ALLOW_WRITE=true            # ← this source becomes writable
 ```
 
-The caller also needs a `writer` or `admin` role. Both gates must agree — even `admin` cannot write to a source where `_WRITE` isn't `true`. This is a deliberate safety: a deployment-level kill switch.
+The caller also needs a `writer` or `admin` role. Both gates must agree — even `admin` cannot write to a source where `_ALLOW_WRITE` isn't `true`. This is a deliberate safety: a deployment-level kill switch.
 
 > 💡 For production, prefer leaving `WRITE=false` and creating a DB user with only `SELECT` grants. That gives you defence in depth.
 
@@ -268,9 +268,9 @@ The caller also needs a `writer` or `admin` role. Both gates must agree — even
 Every authenticated user has a role. **Reads** are unrestricted for any valid token. **Writes** require *two* independent gates:
 
 1. The caller's role is `writer` or `admin`.
-2. The source is marked writable (`<PREFIX>_<NAME>_WRITE=true`).
+2. The source is marked writable (`<PREFIX>_<NAME>_ALLOW_WRITE=true`).
 
-| Caller role | Source `_WRITE=true` | `db_execute_write` result                |
+| Caller role | Source `_ALLOW_WRITE=true` | `db_execute_write` result                |
 |-------------|----------------------|------------------------------------------|
 | reader      | any                  | `forbidden: user X (role=reader)…`       |
 | writer      | true                 | ✅ allowed                                |

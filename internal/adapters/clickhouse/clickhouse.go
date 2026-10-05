@@ -9,6 +9,7 @@
 //	CH_<NAME>_PASS   (default empty)
 //	CH_<NAME>_DB     (default "default")
 //	CH_<NAME>_SECURE (default empty; "true" enables TLS)
+//	CH_<NAME>_PROTOCOL (native | http; default native, auto-detects http)
 package clickhouse
 
 import (
@@ -53,7 +54,10 @@ func (a *Adapter) Discover(env map[string]string) ([]adapters.Source, error) {
 				"pass":   cfg["PASS"],
 				"db":     orDefault(cfg["DB"], "default"),
 				"secure": cfg["SECURE"],
-				"write":  cfg["WRITE"], // "true" → db_execute_write allowed
+				// "native" | "http"; empty = native, auto-switching to http on
+				// ports 8123/8443 or when the port answers with HTTP.
+				"protocol": cfg["PROTOCOL"],
+				"write":    cfg["WRITE"], // "true" → db_execute_write allowed
 			},
 		})
 	}
@@ -71,6 +75,29 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 	port := 9000
 	fmt.Sscanf(src.Cfg["port"], "%d", &port)
 
+	proto := strings.ToLower(src.Cfg["protocol"])
+	if proto == "" && (port == 8123 || port == 8443) {
+		proto = "http"
+	}
+	db, err := open(ctx, src, port, proto)
+	if err != nil && proto == "" && strings.Contains(err.Error(), "unexpected packet") {
+		// The port answered with HTTP ("unexpected packet [72]" is the 'H' of
+		// "HTTP/1.1"), e.g. a NodePort in front of 8123. Retry over HTTP.
+		db, err = open(ctx, src, port, "http")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	a.mu.Lock()
+	a.dbs[src.Name] = db
+	a.mu.Unlock()
+	return &conn{db: db}, nil
+}
+
+// open builds a pool for src over the given protocol ("http", or anything
+// else for native) and pings it.
+func open(ctx context.Context, src adapters.Source, port int, proto string) (*sql.DB, error) {
 	opts := &clickhouse.Options{
 		Addr: []string{fmt.Sprintf("%s:%d", src.Cfg["host"], port)},
 		Auth: clickhouse.Auth{
@@ -86,7 +113,10 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 			"max_execution_time": 300,
 		},
 	}
-	if src.Cfg["secure"] == "true" {
+	if proto == "http" {
+		opts.Protocol = clickhouse.HTTP
+	}
+	if config.IsTruthy(src.Cfg["secure"]) {
 		opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 	db := clickhouse.OpenDB(opts)
@@ -94,11 +124,7 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 		_ = db.Close()
 		return nil, fmt.Errorf("clickhouse ping %s: %w", src.Name, err)
 	}
-
-	a.mu.Lock()
-	a.dbs[src.Name] = db
-	a.mu.Unlock()
-	return &conn{db: db}, nil
+	return db, nil
 }
 
 func (a *Adapter) CloseAll() error {

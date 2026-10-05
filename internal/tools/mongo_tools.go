@@ -52,7 +52,7 @@ func RegisterMongo(s *mcp.Server, d *Deps) {
 }
 
 func (d *Deps) mongoClient(name string) (*mongo.Client, error) {
-	sr, err := d.findSource(name)
+	sr, err := d.findSource(name, adapters.KindMongoDB)
 	if err != nil {
 		return nil, err
 	}

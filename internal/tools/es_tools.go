@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	es "github.com/elastic/go-elasticsearch/v8"
@@ -58,7 +59,7 @@ func RegisterES(s *mcp.Server, d *Deps) {
 }
 
 func (d *Deps) esClient(name string) (*es.Client, error) {
-	sr, err := d.findSource(name)
+	sr, err := d.findSource(name, adapters.KindElasticsearch)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +116,19 @@ func (d *Deps) esListIndices(ctx context.Context, args map[string]any) (string, 
 		return "", err
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusForbidden {
+		// The user may read indices but lacks the "monitor" privilege that
+		// _cat/indices needs; list names (without health/size) instead.
+		rows, err := esad.ResolveIndex(ctx, cli, pattern)
+		if err != nil {
+			return "", err
+		}
+		out := make([]map[string]any, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, map[string]any{"index": r["index"], "type": r["type"]})
+		}
+		return format.ToTOON("Indices", out), nil
+	}
 	if res.IsError() {
 		return "", fmt.Errorf("es: %s", res.String())
 	}

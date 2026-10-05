@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +30,11 @@ func LoadEnv() map[string]string {
 //
 // Single-segment names like "PG_HOST" are skipped — every source must have at
 // least one underscore between its name and a key.
+//
+// Keys are canonicalized through keyAliases, so the self-explanatory spellings
+// (PG_CORE_PASSWORD, PG_CORE_DATABASE, PG_CORE_ALLOW_WRITE) and the short ones
+// (PG_CORE_PASS, PG_CORE_DB, PG_CORE_WRITE) are interchangeable. Values are
+// trimmed, and WRITE is normalized to "true"/"false".
 func ParsePrefixed(env map[string]string, prefix string) map[string]map[string]string {
 	out := map[string]map[string]string{}
 	for k, v := range env {
@@ -42,10 +48,35 @@ func ParsePrefixed(env map[string]string, prefix string) map[string]map[string]s
 			continue
 		}
 		name, key := rest[:idx], rest[idx+1:]
+		if canon, ok := keyAliases[key]; ok {
+			key = canon
+		}
+		v = strings.TrimSpace(v)
+		if key == "WRITE" {
+			v = strconv.FormatBool(IsTruthy(v))
+		}
 		if _, ok := out[name]; !ok {
 			out[name] = map[string]string{}
 		}
 		out[name][key] = v
 	}
 	return out
+}
+
+// keyAliases maps readable env-key spellings to the canonical short key the
+// adapters read.
+var keyAliases = map[string]string{
+	"PASSWORD":    "PASS",
+	"USERNAME":    "USER",
+	"DATABASE":    "DB",
+	"ALLOW_WRITE": "WRITE",
+}
+
+// IsTruthy reports whether an env flag value means "on".
+func IsTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
 }

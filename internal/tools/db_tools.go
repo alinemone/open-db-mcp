@@ -138,18 +138,39 @@ func (d *Deps) listSources(ctx context.Context, _ map[string]any) (string, error
 	return format.ToTOON("Sources", rows), nil
 }
 
-func (d *Deps) findSource(name string) (adapters.SourceRef, error) {
+// sqlKinds are the kinds the generic db_* tools prefer when two sources of
+// different kinds share a name (e.g. PG_SALAMGATE_* and REDIS_SALAMGATE_*).
+var sqlKinds = []adapters.Kind{
+	adapters.KindPostgres, adapters.KindMySQL, adapters.KindClickHouse,
+	adapters.KindSQLite, adapters.KindMongoDB,
+}
+
+// findSource resolves a source by name (case-insensitive). Names only have to
+// be unique per kind, so when several kinds share a name the first kind in
+// prefer wins; with no match among prefer, the first source found is used.
+func (d *Deps) findSource(name string, prefer ...adapters.Kind) (adapters.SourceRef, error) {
 	want := strings.ToUpper(name)
+	var matches []adapters.SourceRef
 	for _, sr := range d.Sources {
 		if strings.ToUpper(sr.Source.Name) == want {
-			return sr, nil
+			matches = append(matches, sr)
 		}
 	}
-	return adapters.SourceRef{}, fmt.Errorf("source not found: %s", name)
+	if len(matches) == 0 {
+		return adapters.SourceRef{}, fmt.Errorf("source not found: %s", name)
+	}
+	for _, k := range prefer {
+		for _, sr := range matches {
+			if sr.Source.Kind == k {
+				return sr, nil
+			}
+		}
+	}
+	return matches[0], nil
 }
 
 func (d *Deps) connect(ctx context.Context, name string) (adapters.Conn, adapters.SourceRef, error) {
-	sr, err := d.findSource(name)
+	sr, err := d.findSource(name, sqlKinds...)
 	if err != nil {
 		return nil, sr, err
 	}
@@ -355,7 +376,7 @@ func (d *Deps) executeWrite(ctx context.Context, args map[string]any) (string, e
 	if strings.TrimSpace(q) == "" {
 		return "", fmt.Errorf("query is required")
 	}
-	sr, err := d.findSource(src)
+	sr, err := d.findSource(src, sqlKinds...)
 	if err != nil {
 		return "", err
 	}
@@ -384,7 +405,7 @@ func requireWrite(ctx context.Context, sr adapters.SourceRef) error {
 	}
 	if sr.Source.Cfg["write"] != "true" {
 		return fmt.Errorf(
-			"source %s is read-only; set %s%s_WRITE=true in env to enable db_execute_write",
+			"source %s is read-only; set %s%s_ALLOW_WRITE=true in env to enable db_execute_write",
 			sr.Source.Name, sr.Adapter.EnvPrefix(), sr.Source.Name,
 		)
 	}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/open-db-mcp/open-db-mcp/internal/auth"
@@ -108,4 +110,56 @@ func TestParsePrefixed_HandlesNestedKeys(t *testing.T) {
 	if out3["PROD"]["INSECURE_TLS"] != "true" {
 		t.Errorf("ES_PROD_INSECURE_TLS not parsed: %+v", out3)
 	}
+}
+
+func TestParsePrincipals_TokenSuffix(t *testing.T) {
+	env := map[string]string{
+		"MCP_USER_ALI_TOKEN": "tok-ali",
+		"MCP_USER_ALI_ROLE":  "admin",
+		"MCP_USER_BOB":       "tok-bob-old",
+		"MCP_USER_BOB_TOKEN": "tok-bob-new",
+	}
+	ps := parsePrincipals(env)
+	if len(ps) != 2 {
+		t.Fatalf("got %d principals, want 2", len(ps))
+	}
+	if r := findByName(t, ps, "ali").Role; r != auth.RoleAdmin {
+		t.Errorf("ali role = %v, want admin", r)
+	}
+	if _, ok := lookupToken(ps, "tok-bob-new"); !ok {
+		t.Errorf("MCP_USER_BOB_TOKEN should win over MCP_USER_BOB")
+	}
+	if _, ok := lookupToken(ps, "tok-bob-old"); ok {
+		t.Errorf("MCP_USER_BOB should be overridden by MCP_USER_BOB_TOKEN")
+	}
+}
+
+func TestParsePrefixed_Aliases(t *testing.T) {
+	env := map[string]string{
+		"PG_CORE_PASSWORD":    "secret",
+		"PG_CORE_DATABASE":    "core",
+		"PG_CORE_ALLOW_WRITE": "yes  ",
+		"PG_LOG_WRITE":        "nope",
+	}
+	g := ParsePrefixed(env, "PG_")
+	if g["CORE"]["PASS"] != "secret" || g["CORE"]["DB"] != "core" {
+		t.Fatalf("aliases not canonicalized: %v", g["CORE"])
+	}
+	if g["CORE"]["WRITE"] != "true" || g["LOG"]["WRITE"] != "false" {
+		t.Fatalf("WRITE not normalized: %v / %v", g["CORE"], g["LOG"])
+	}
+}
+
+// lookupToken checks a raw token against principals through the real auth
+// middleware, since token matching is private to the auth package.
+func lookupToken(ps []auth.Principal, token string) (string, bool) {
+	var name string
+	h := auth.Middleware(ps)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		name = auth.PrincipalOf(r.Context()).Name
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return name, rec.Code == http.StatusOK
 }

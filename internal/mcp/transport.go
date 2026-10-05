@@ -134,7 +134,7 @@ func HTTPHandler(s *Server, opts HandlerOptions) http.Handler {
 				)
 				writeRPCResult(w, r, req.ID, map[string]any{
 					"content": []map[string]any{{
-						"type": "text", "text": "Error: " + clientErrMsg(err, opts.VerboseErrors),
+						"type": "text", "text": "Error: " + clientErrMsg(err, source, opts.VerboseErrors),
 					}},
 					"isError": true,
 				})
@@ -269,6 +269,8 @@ func classifyErr(err error) string {
 		return "readonly"
 	case strings.HasPrefix(msg, "sql error"):
 		return "query_error"
+	case connHint(msg) != "":
+		return "connection"
 	default:
 		return "error"
 	}
@@ -276,8 +278,10 @@ func classifyErr(err error) string {
 
 // clientErrMsg decides what to send back to the client. User-actionable errors
 // (auth, RBAC, "source not found", AssertReadOnly rejections) pass through;
-// anything else collapses to a generic message unless VerboseErrors is set.
-func clientErrMsg(err error, verbose bool) string {
+// connection failures are reduced to a fixed hint (no hosts, IPs or
+// credentials); anything else collapses to a generic message unless
+// VerboseErrors is set. The full error is always in the server log.
+func clientErrMsg(err error, source string, verbose bool) string {
 	if err == nil {
 		return ""
 	}
@@ -288,7 +292,43 @@ func clientErrMsg(err error, verbose bool) string {
 	if userVisible(msg) {
 		return msg
 	}
-	return "internal error"
+	if hint := connHint(msg); hint != "" {
+		if source == "" {
+			return "connection error: " + hint
+		}
+		return "connection error on source " + source + ": " + hint
+	}
+	return "internal error (see server log for details)"
+}
+
+// connHint maps a driver-level connection error to a short, credential-free
+// explanation of what to fix. Returns "" for anything else.
+func connHint(msg string) string {
+	m := strings.ToLower(msg)
+	switch {
+	case strings.Contains(m, "connection refused"), strings.Contains(m, "actively refused"):
+		return "connection refused — nothing is listening on the configured host:port (is the kubectl port-forward / service running?)"
+	case strings.Contains(m, "no such host"):
+		return "host name could not be resolved — check <PREFIX>_<NAME>_HOST"
+	case strings.Contains(m, "network is unreachable"), strings.Contains(m, "no route to host"):
+		return "host unreachable — check network / VPN"
+	case strings.Contains(m, "i/o timeout"), strings.Contains(m, "dial") && strings.Contains(m, "deadline exceeded"):
+		return "connection timed out — host is not reachable or firewalled"
+	case strings.Contains(m, "authentication failed"), strings.Contains(m, "authentication_failed"),
+		strings.Contains(m, "password authentication"), strings.Contains(m, "wrongpass"),
+		strings.Contains(m, "invalid password"), strings.Contains(m, "access denied for user"),
+		strings.Contains(m, "401 unauthorized"):
+		return "authentication failed — check the USER / PASSWORD (or API_KEY) of this source"
+	case strings.Contains(m, "403 forbidden"):
+		return "the server rejected the request (403) — the configured user lacks the privilege for this operation"
+	case strings.Contains(m, "unexpected packet"):
+		return "protocol mismatch — the port speaks a different protocol (for ClickHouse HTTP ports set CH_<NAME>_PROTOCOL=http)"
+	case strings.Contains(m, "x509"), strings.Contains(m, "tls:"):
+		return "TLS handshake failed — check SSLMODE / SECURE / INSECURE_TLS settings"
+	case strings.Contains(m, "does not exist") && strings.Contains(m, "database"):
+		return "database does not exist — check <PREFIX>_<NAME>_DATABASE"
+	}
+	return ""
 }
 
 // userVisible reports whether an error message is safe to return verbatim.

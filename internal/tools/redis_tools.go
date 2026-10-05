@@ -46,7 +46,7 @@ func RegisterRedis(s *mcp.Server, d *Deps) {
 }
 
 func (d *Deps) redisClient(name string) (*redisAdapterClient, error) {
-	sr, err := d.findSource(name)
+	sr, err := d.findSource(name, adapters.KindRedis)
 	if err != nil {
 		return nil, err
 	}

@@ -18,4 +18,5 @@ coverage.*
 # Local env
 .env
 .env.local
+.env.bak
 .env.*.local

@@ -67,7 +67,7 @@ cp .env.example .env
 <div dir="ltr">
 
 ```env
-MCP_USER_ADMIN=my-secret-token-123
+MCP_USER_ADMIN_TOKEN=my-secret-token-123
 MCP_USER_ADMIN_ROLE=admin
 ```
 
@@ -81,7 +81,7 @@ MCP_USER_ADMIN_ROLE=admin
 PG_MAIN_HOST=host.docker.internal     # آدرس دیتابیس (پایین توضیح هست)
 PG_MAIN_PORT=5432
 PG_MAIN_USER=postgres
-PG_MAIN_PASS=your-postgres-password
+PG_MAIN_PASSWORD=your-postgres-password
 PG_MAIN_DB=your_database_name
 ```
 
@@ -119,7 +119,7 @@ curl http://localhost:3000/health
 
 ### قدم ۴ — کلاینت AI رو وصل کن
 
-کلاینت خودت رو از پایین انتخاب کن. به‌جای `my-secret-token-123` همون چیزی که تو `MCP_USER_ADMIN` گذاشتی رو بذار.
+کلاینت خودت رو از پایین انتخاب کن. به‌جای `my-secret-token-123` همون چیزی که تو `MCP_USER_ADMIN_TOKEN` گذاشتی رو بذار.
 
 #### Claude Code (CLI)
 
@@ -197,17 +197,17 @@ Claude Desktop رو ری‌استارت کن.
 ```env
 PG_MAIN_HOST=10.0.0.1
 PG_MAIN_USER=postgres
-PG_MAIN_PASS=secret1
+PG_MAIN_PASSWORD=secret1
 PG_MAIN_DB=app
 
 PG_ANALYTICS_HOST=10.0.0.2
 PG_ANALYTICS_USER=postgres
-PG_ANALYTICS_PASS=secret2
+PG_ANALYTICS_PASSWORD=secret2
 PG_ANALYTICS_DB=warehouse
 
 MYSQL_CRM_HOST=10.0.0.3
 MYSQL_CRM_USER=root
-MYSQL_CRM_PASS=secret3
+MYSQL_CRM_PASSWORD=secret3
 MYSQL_CRM_DB=crm
 ```
 
@@ -224,7 +224,7 @@ MYSQL_CRM_DB=crm
 CH_OLAP_HOST=10.0.0.4
 CH_OLAP_PORT=9000
 CH_OLAP_USER=default
-CH_OLAP_PASS=
+CH_OLAP_PASSWORD=
 CH_OLAP_DB=default
 
 # MongoDB (با URI)
@@ -283,16 +283,16 @@ PORT=3001
 
 ### اضافه کردن کاربرهای بیشتر (توکن متفاوت)
 
-هر خط `MCP_USER_<NAME>` یه توکن می‌سازه. اگه نقش رو ننویسی، پیش‌فرض `reader` هست:
+هر خط `MCP_USER_<NAME>_TOKEN` یه توکن می‌سازه. اگه نقش رو ننویسی، پیش‌فرض `reader` هست:
 
 <div dir="ltr">
 
 ```env
-MCP_USER_ADMIN=my-secret-token-123
+MCP_USER_ADMIN_TOKEN=my-secret-token-123
 MCP_USER_ADMIN_ROLE=admin
 
-MCP_USER_ALI=ali-token-456          # نقش پیش‌فرض reader → فقط خواندنی
-MCP_USER_DEV=dev-token-789
+MCP_USER_ALI_TOKEN=ali-token-456          # نقش پیش‌فرض reader → فقط خواندنی
+MCP_USER_DEV_TOKEN=dev-token-789
 MCP_USER_DEV_ROLE=writer            # روی سورس‌های writable می‌تونه بنویسه
 ```
 
@@ -302,18 +302,18 @@ MCP_USER_DEV_ROLE=writer            # روی سورس‌های writable می‌�
 
 ### فعال کردن write روی یه سورس خاص (اختیاری)
 
-به‌صورت پیش‌فرض **همه‌ی سورس‌ها فقط-خواندنی هستن.** برای اینکه `db_execute_write` روی یه سورس کار کنه، `_WRITE=true` بذار:
+به‌صورت پیش‌فرض **همه‌ی سورس‌ها فقط-خواندنی هستن.** برای اینکه `db_execute_write` روی یه سورس کار کنه، `_ALLOW_WRITE=true` بذار:
 
 <div dir="ltr">
 
 ```env
 PG_DEV_HOST=host.docker.internal
-PG_DEV_WRITE=true            # ← این سورس writable می‌شه
+PG_DEV_ALLOW_WRITE=true            # ← این سورس writable می‌شه
 ```
 
 </div>
 
-کاربر صدا‌زننده هم باید نقش `writer` یا `admin` داشته باشه. هر دو شرط باید با هم برقرار باشن — حتی `admin` هم نمی‌تونه روی سورسی که `_WRITE` ندارن چیزی بنویسه. این یک گارد عمدیه: یک کلید قطع‌کننده‌ی سطح deployment.
+کاربر صدا‌زننده هم باید نقش `writer` یا `admin` داشته باشه. هر دو شرط باید با هم برقرار باشن — حتی `admin` هم نمی‌تونه روی سورسی که `_ALLOW_WRITE` ندارن چیزی بنویسه. این یک گارد عمدیه: یک کلید قطع‌کننده‌ی سطح deployment.
 
 > 💡 برای production بهتره `WRITE=false` بمونه و تو خود دیتابیس یه user بسازی که فقط `SELECT` grant داره. این بهت دفاع دولایه می‌ده.
 
@@ -326,11 +326,11 @@ PG_DEV_WRITE=true            # ← این سورس writable می‌شه
 هر کاربر یک نقش داره. **خواندن‌ها** برای هر توکن معتبر بدون محدودیت‌ه. **نوشتن** نیاز به *دو* گارد مستقل داره:
 
 1. نقش کاربر `writer` یا `admin` باشه.
-2. سورس writable علامت‌گذاری شده باشه (`<PREFIX>_<NAME>_WRITE=true`).
+2. سورس writable علامت‌گذاری شده باشه (`<PREFIX>_<NAME>_ALLOW_WRITE=true`).
 
 <div dir="ltr">
 
-| Caller role | Source `_WRITE=true` | `db_execute_write` result                |
+| Caller role | Source `_ALLOW_WRITE=true` | `db_execute_write` result                |
 |-------------|----------------------|------------------------------------------|
 | reader      | any                  | `forbidden: user X (role=reader)…`       |
 | writer      | true                 | ✅ allowed                                |

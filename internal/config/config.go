@@ -65,8 +65,10 @@ func Load(env map[string]string) ServerConfig {
 // parsePrincipals collects API tokens from two styles of env vars:
 //
 //  1. Per-user (preferred):
-//     MCP_USER_ALI=token-for-ali
-//     MCP_USER_ALI_ROLE=writer        (default: reader)
+//     MCP_USER_ALI_TOKEN=token-for-ali
+//     MCP_USER_ALI_ROLE=writer        (reader | writer | admin; default reader)
+//
+//     The older spelling without the suffix (MCP_USER_ALI=token) still works.
 //
 //  2. Legacy comma-list (kept for backward compat with db-mcp):
 //     MCP_API_KEYS=token1:role1,token2:role2
@@ -106,23 +108,30 @@ func parsePrincipals(env map[string]string) []auth.Principal {
 		}
 	}
 
-	// Per-user form: any env key starting with MCP_USER_ and *not* ending in
-	// _ROLE. The role suffix is read separately so users can supply it
-	// alongside the token.
-	for k, v := range env {
-		if !strings.HasPrefix(k, "MCP_USER_") {
-			continue
+	// Per-user form. Bare MCP_USER_<NAME> entries are collected first and
+	// MCP_USER_<NAME>_TOKEN second, so the explicit spelling wins when both
+	// are set. MCP_USER_<NAME>_ROLE is read separately.
+	tokens := map[string]string{}
+	for _, explicit := range []bool{false, true} {
+		for k, v := range env {
+			rest, ok := strings.CutPrefix(k, "MCP_USER_")
+			if !ok || strings.HasSuffix(rest, "_ROLE") {
+				continue
+			}
+			if strings.HasSuffix(rest, "_TOKEN") != explicit {
+				continue
+			}
+			name := strings.ToUpper(strings.TrimSuffix(rest, "_TOKEN"))
+			token := strings.TrimSpace(v)
+			if name == "" || token == "" {
+				continue
+			}
+			tokens[name] = token
 		}
-		if strings.HasSuffix(k, "_ROLE") {
-			continue
-		}
-		name := strings.ToLower(strings.TrimPrefix(k, "MCP_USER_"))
-		token := strings.TrimSpace(v)
-		if name == "" || token == "" {
-			continue
-		}
-		role := auth.ParseRole(env["MCP_USER_"+strings.ToUpper(name)+"_ROLE"])
-		byName[name] = raw{token: token, role: role}
+	}
+	for name, token := range tokens {
+		role := auth.ParseRole(env["MCP_USER_"+name+"_ROLE"])
+		byName[strings.ToLower(name)] = raw{token: token, role: role}
 	}
 
 	out := make([]auth.Principal, 0, len(byName))

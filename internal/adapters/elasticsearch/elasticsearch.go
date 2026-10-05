@@ -115,13 +115,15 @@ func (a *Adapter) Connect(ctx context.Context, src adapters.Source) (adapters.Co
 		return nil, fmt.Errorf("es client %s: %w", src.Name, err)
 	}
 
-	// Light ping via Info.
+	// Light ping via Info. A 403 means the credentials were accepted but the
+	// user lacks the cluster "monitor" privilege, which read-only log users
+	// usually do; index-level reads still work, so treat it as connected.
 	res, err := cli.Info(cli.Info.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("es ping %s: %w", src.Name, err)
 	}
 	_ = res.Body.Close()
-	if res.IsError() {
+	if res.IsError() && res.StatusCode != http.StatusForbidden {
 		return nil, fmt.Errorf("es ping %s: %s", src.Name, res.Status())
 	}
 
@@ -170,6 +172,19 @@ func (c *conn) ListTables(ctx context.Context, schema string) ([]adapters.TableI
 		return nil, fmt.Errorf("es cat indices: %w", err)
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusForbidden {
+		// _cat/indices needs the "monitor" index privilege; fall back to
+		// _resolve/index, which plain readers are allowed to call.
+		names, err := ResolveIndex(ctx, c.client, "*")
+		if err != nil {
+			return nil, err
+		}
+		out := make([]adapters.TableInfo, 0, len(names))
+		for _, r := range names {
+			out = append(out, adapters.TableInfo{Schema: "_all", Name: r["index"], Kind: r["type"]})
+		}
+		return out, nil
+	}
 	if res.IsError() {
 		return nil, fmt.Errorf("es cat indices: %s", res.Status())
 	}
@@ -210,6 +225,44 @@ func (c *conn) ExecuteQuery(_ context.Context, _ adapters.Query) (adapters.Query
 
 // Client exposes the underlying ES client to es_* tools through the Conn.
 func (c *conn) Client() *es.Client { return c.client }
+
+// ResolveIndex lists indices, aliases and data streams matching pattern via
+// _resolve/index. Unlike _cat/indices it only needs read-level privileges.
+// Each row has "index" (name) and "type" (index | alias | data_stream).
+func ResolveIndex(ctx context.Context, cli *es.Client, pattern string) ([]map[string]string, error) {
+	res, err := cli.Indices.ResolveIndex(
+		[]string{pattern},
+		cli.Indices.ResolveIndex.WithContext(ctx),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("es resolve index: %w", err)
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		return nil, fmt.Errorf("es resolve index: %s", res.Status())
+	}
+	type named struct {
+		Name string `json:"name"`
+	}
+	var body struct {
+		Indices     []named `json:"indices"`
+		Aliases     []named `json:"aliases"`
+		DataStreams []named `json:"data_streams"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("es resolve index decode: %w", err)
+	}
+	var out []map[string]string
+	add := func(items []named, typ string) {
+		for _, it := range items {
+			out = append(out, map[string]string{"index": it.Name, "type": typ})
+		}
+	}
+	add(body.DataStreams, "data_stream")
+	add(body.Indices, "index")
+	add(body.Aliases, "alias")
+	return out, nil
+}
 
 func orDefault(s, def string) string {
 	if s == "" {
