@@ -1,0 +1,21 @@
+# Runtime-only image around a binary compiled on the host.
+#
+# Use this when compiling inside Docker is not an option — e.g. Docker
+# Desktop's VM has little memory and the in-container `go build` gets it
+# killed. Build with `make docker-prebuilt`, which cross-compiles
+# bin/linux/open-db-mcp and uses bin/linux as the build context.
+# The runtime stage mirrors the one in Dockerfile.
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata wget \
+    && addgroup -S app && adduser -S -G app app
+
+COPY open-db-mcp /usr/local/bin/open-db-mcp
+
+USER app
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:3000/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/open-db-mcp"]

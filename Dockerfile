@@ -7,12 +7,22 @@ WORKDIR /build
 
 RUN apk add --no-cache git ca-certificates
 
+# Packages compiled in parallel. Compiling the pure-Go SQLite driver takes
+# ~1.5 GB per job, so keep this low on small Docker VMs; raise it for speed.
+ARG BUILD_JOBS=2
+
+# The module and build caches persist across builds (BuildKit cache mounts):
+# later builds only recompile changed packages — much faster and far less
+# memory than a cold build.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -p ${BUILD_JOBS} \
       -ldflags="-w -s" \
       -trimpath \
       -o /open-db-mcp ./cmd/server

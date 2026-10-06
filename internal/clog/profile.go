@@ -30,6 +30,7 @@ type Candidates struct {
 	Namespace      []string
 	Container      []string
 	Service        []string
+	Pod            []string
 	IngressStatus  []string
 	IngressLatency []string
 	IngressHost    []string
@@ -50,15 +51,17 @@ func FromConfig(c config.CLOGConfig) Profile {
 		IngressIdx: c.IngressIndex,
 		LogsPrefix: c.LogsPrefix,
 		AllLogsIdx: c.AllLogsIndex,
-		TimeField:  "@timestamp",
-		MsgField:   "message",
+		TimeField:  orStr(c.TimeField, "@timestamp"),
+		MsgField:   orStr(c.MessageField, "message"),
 		Candidates: Candidates{
 			Namespace: def(c.NamespaceFlds,
 				"clog_namespace", "data_stream.namespace", "kubernetes.pod_namespace", "kubernetes.namespace"),
 			Container: def(c.ContainerFlds,
 				"kubernetes.container_name", "kubernetes.container.name", "container.name"),
 			Service: def(c.ServiceFlds,
-				"kubernetes.pod_labels.app", "kubernetes.labels.app", "service.name"),
+				"kubernetes.pod_labels.app", "kubernetes.pod_labels.app_kubernetes_io/name", "kubernetes.labels.app", "service.name"),
+			Pod: def(c.PodFlds,
+				"kubernetes.pod_name", "kubernetes.pod.name"),
 			IngressStatus: def(c.StatusFlds,
 				"status", "http.status_code", "response.status", "message_json.status"),
 			IngressLatency: def(c.LatencyFlds,
@@ -66,9 +69,16 @@ func FromConfig(c config.CLOGConfig) Profile {
 			IngressHost: def(c.HostFlds,
 				"host", "server_name", "http.host", "message_json.host"),
 			IngressPath: def(c.PathFlds,
-				"path", "uri", "url.path", "request_uri", "message_json.request_uri", "message_json.path"),
+				"path", "uri", "url.path", "request_uri", "message_json.request_uri", "message_json.path", "message_json.uri"),
 		},
 	}
+}
+
+func orStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // Enabled reports whether the CLOG profile should expose its tools.

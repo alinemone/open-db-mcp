@@ -252,18 +252,20 @@ ES_LOGS_API_KEY=BASE64_ID_AND_KEY
 **عمومی (روی همه‌ی منابع SQL-مانند):**
 
 - `db_list_sources` · `db_list_schemas` · `db_list_tables` · `db_list_columns`
-- `db_table_card` · `db_table_card_full` — ستون‌ها + آمار + نمونه‌داده + ایندکس‌ها + FK ها
+- `db_table_card` — ستون‌ها + آمار + نمونه‌داده + هشدارها (جدول خیلی بزرگ، timestamp بدون timezone)
+- `db_table_card_full` — به‌علاوه‌ی primary key، FK ها، جدول‌هایی که به این جدول ارجاع دارن، تعریف ایندکس‌ها، engine/کلیدها/CREATE TABLE در ClickHouse، رابطه‌های حدسی از روی اسم ستون‌ها و راهنمای کوئری
 - `db_find_relationships` — روابط PK/FK
 - `db_execute_query` — SQL فقط-خواندنی، خروجی TOON
 - `db_execute_write` — SQL نوشتنی (اختیاری، به ازای هر سورس — پایین توضیح هست)
-- `search_tables` — جست‌وجوی fuzzy تو جدول/ستون‌های همه‌ی سورس‌ها
+- `search_tables` — جست‌وجوی fuzzy تو جدول/ستون‌های همه‌ی سورس‌ها (تحمل یک غلط تایپی، مترادف با `SEARCH_SYNONYMS`، و `use_regex` برای regex)
+- اسم‌های قدیمی db-mcp: `pg_execute_query`، `db_table_cardfull`
 
 **اختصاصی هر دیتابیس:**
 
 - **MongoDB** — `mongo_list_collections`, `mongo_find`, `mongo_aggregate`
 - **Redis** — `redis_keys`, `redis_get`, `redis_info`
-- **Elasticsearch** — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
-- **CLOG** (اختیاری) — `clog_profile`, `clog_container_logs`
+- **Elasticsearch** — `es_list_sources`, `es_list_indices`, `es_resolve_index`, `es_field_caps`, `es_describe_index`, `es_analyze_index`, `es_search`
+- **CLOG** (اختیاری) — `clog_profile`، `clog_list_namespaces`، `clog_list_containers`، `clog_find_targets`، `clog_container_logs` (secret ها ماسک می‌شن)، `clog_ingress_metrics`، `clog_ingress_top_routes`
 
 ---
 

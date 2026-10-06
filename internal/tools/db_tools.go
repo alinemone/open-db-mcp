@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/open-db-mcp/open-db-mcp/internal/adapters"
@@ -27,6 +28,7 @@ type Deps struct {
 	// clogProfile is non-empty only when CLOG is enabled (CLOG_ES_SOURCE set).
 	// Populated by RegisterCLOG; read by clog_* handlers.
 	clogProfile clog.Profile
+	clogCaps    capsCache // _field_caps cache for clog_* field resolution
 }
 
 // RegisterDB attaches the generic db_* tools to the MCP server.
@@ -51,6 +53,7 @@ func RegisterDB(s *mcp.Server, d *Deps) {
 		InputSchema: schemaObj(map[string]any{
 			"source": map[string]any{"type": "string"},
 			"schema": map[string]any{"type": "string"},
+			"search": map[string]any{"type": "string", "description": "Optional case-insensitive substring filter on table names"},
 		}, "source", "schema"),
 		Handler: d.listTables,
 	})
@@ -66,7 +69,7 @@ func RegisterDB(s *mcp.Server, d *Deps) {
 	})
 	s.RegisterTool(mcp.Tool{
 		Name:        "db_table_card",
-		Description: "Identity card for a table: stats and a few sample rows.",
+		Description: "Identity card for a table: columns, stats, a few sample rows and warnings (huge table, timestamps without time zone).",
 		InputSchema: schemaObj(map[string]any{
 			"source":         map[string]any{"type": "string"},
 			"schema":         map[string]any{"type": "string"},
@@ -75,16 +78,28 @@ func RegisterDB(s *mcp.Server, d *Deps) {
 		}, "source", "schema", "table"),
 		Handler: d.tableCard,
 	})
+	cardFullSchema := schemaObj(map[string]any{
+		"source":           map[string]any{"type": "string"},
+		"schema":           map[string]any{"type": "string"},
+		"table":            map[string]any{"type": "string"},
+		"include_sample":   map[string]any{"type": "boolean", "default": true},
+		"max_candidates":   map[string]any{"type": "number", "default": 50, "description": "Max heuristic relationship candidates (1-200)"},
+		"include_create":   map[string]any{"type": "boolean", "default": true, "description": "Include the CREATE TABLE statement (ClickHouse)"},
+		"max_create_chars": map[string]any{"type": "number", "default": 20000, "description": "Truncate CREATE TABLE after this many chars (1000-100000)"},
+	}, "source", "schema", "table")
 	s.RegisterTool(mcp.Tool{
-		Name:        "db_table_card_full",
-		Description: "Full table card: columns, stats, sample, indexes, and foreign-key relationships.",
-		InputSchema: schemaObj(map[string]any{
-			"source":         map[string]any{"type": "string"},
-			"schema":         map[string]any{"type": "string"},
-			"table":          map[string]any{"type": "string"},
-			"include_sample": map[string]any{"type": "boolean", "default": true},
-		}, "source", "schema", "table"),
-		Handler: d.tableCardFull,
+		Name: "db_table_card_full",
+		Description: "Full table card: everything in db_table_card plus primary key, foreign keys, tables referencing this one, " +
+			"index definitions, engine/sorting/partition keys and CREATE TABLE (ClickHouse), heuristic relationships inferred " +
+			"from column names, and query guidance (time columns, soft delete).",
+		InputSchema: cardFullSchema,
+		Handler:     d.tableCardFull,
+	})
+	s.RegisterTool(mcp.Tool{
+		Name:        "db_table_cardfull",
+		Description: "Legacy alias of db_table_card_full.",
+		InputSchema: cardFullSchema,
+		Handler:     d.tableCardFull,
 	})
 	s.RegisterTool(mcp.Tool{
 		Name:        "db_find_relationships",
@@ -106,6 +121,15 @@ func RegisterDB(s *mcp.Server, d *Deps) {
 		Handler: d.executeQuery,
 	})
 	s.RegisterTool(mcp.Tool{
+		Name:        "pg_execute_query",
+		Description: "Legacy alias of db_execute_query (works on any SQL source).",
+		InputSchema: schemaObj(map[string]any{
+			"source": map[string]any{"type": "string"},
+			"query":  map[string]any{"type": "string"},
+		}, "source", "query"),
+		Handler: d.executeQuery,
+	})
+	s.RegisterTool(mcp.Tool{
 		Name:        "db_execute_write",
 		Description: "Execute a mutating SQL statement (INSERT/UPDATE/DELETE/DDL). REQUIRES the source to be explicitly marked writable via PG_<NAME>_WRITE=true (or MYSQL_<NAME>_WRITE=true, etc.). Defaults to off — most sources will refuse this call.",
 		InputSchema: schemaObj(map[string]any{
@@ -116,11 +140,12 @@ func RegisterDB(s *mcp.Server, d *Deps) {
 	})
 	s.RegisterTool(mcp.Tool{
 		Name:        "search_tables",
-		Description: "Fuzzy search across tables and columns from every configured source.",
+		Description: "Fuzzy search across tables and columns from every configured source. Tolerates one typo, matches spaces to underscores and expands synonyms (SEARCH_SYNONYMS); set use_regex for a regular expression.",
 		InputSchema: schemaObj(map[string]any{
-			"pattern": map[string]any{"type": "string"},
-			"scope":   map[string]any{"type": "string", "enum": []string{"all", "table", "column"}, "default": "all"},
-			"limit":   map[string]any{"type": "number", "default": 50},
+			"pattern":   map[string]any{"type": "string"},
+			"scope":     map[string]any{"type": "string", "enum": []string{"all", "table", "column"}, "default": "all"},
+			"use_regex": map[string]any{"type": "boolean", "default": false, "description": "Treat pattern as a case-insensitive regular expression"},
+			"limit":     map[string]any{"type": "number", "default": 50},
 		}, "pattern"),
 		Handler: d.searchTables,
 	})
@@ -206,9 +231,14 @@ func (d *Deps) listTables(ctx context.Context, args map[string]any) (string, err
 	if err != nil {
 		return "", err
 	}
-	rows := make([]map[string]any, len(tables))
-	for i, t := range tables {
-		rows[i] = map[string]any{"table": t.Name, "kind": t.Kind}
+	search, _ := args["search"].(string)
+	search = strings.ToLower(strings.TrimSpace(search))
+	rows := make([]map[string]any, 0, len(tables))
+	for _, t := range tables {
+		if search != "" && !strings.Contains(strings.ToLower(t.Name), search) {
+			continue
+		}
+		rows = append(rows, map[string]any{"table": t.Name, "kind": t.Kind})
 	}
 	return format.ToTOON("Tables", rows), nil
 }
@@ -232,86 +262,6 @@ func (d *Deps) listColumns(ctx context.Context, args map[string]any) (string, er
 		}
 	}
 	return format.ToTOON("Columns", rows), nil
-}
-
-func (d *Deps) tableCard(ctx context.Context, args map[string]any) (string, error) {
-	return d.tableCardImpl(ctx, args, false)
-}
-
-func (d *Deps) tableCardFull(ctx context.Context, args map[string]any) (string, error) {
-	return d.tableCardImpl(ctx, args, true)
-}
-
-func (d *Deps) tableCardImpl(ctx context.Context, args map[string]any, full bool) (string, error) {
-	src, _ := args["source"].(string)
-	schema, _ := args["schema"].(string)
-	table, _ := args["table"].(string)
-	sample, _ := args["include_sample"].(bool)
-	if _, ok := args["include_sample"]; !ok {
-		sample = true
-	}
-
-	conn, _, err := d.connect(ctx, src)
-	if err != nil {
-		return "", err
-	}
-
-	var b strings.Builder
-
-	// Columns
-	cols, err := conn.ListColumns(ctx, schema, table)
-	if err != nil {
-		return "", err
-	}
-	colRows := make([]map[string]any, len(cols))
-	for i, c := range cols {
-		colRows[i] = map[string]any{
-			"name": c.Name, "type": c.Type, "nullable": c.Nullable, "default": c.Default,
-		}
-	}
-	b.WriteString(format.ToTOON("Columns", colRows))
-	b.WriteString("\n\n")
-
-	// Stats
-	stats, err := conn.TableStats(ctx, schema, table)
-	if err == nil {
-		statRows := []map[string]any{{
-			"size_bytes":   stats.SizeBytes,
-			"row_estimate": stats.RowEstimate,
-			"indexes":      strings.Join(stats.Indexes, "|"),
-		}}
-		b.WriteString(format.ToTOON("Stats", statRows))
-		b.WriteString("\n\n")
-	}
-
-	// Sample
-	if sample {
-		rows, err := conn.SampleRows(ctx, schema, table, 5)
-		if err == nil && len(rows) > 0 {
-			b.WriteString(format.ToTOON("Sample", rows))
-			b.WriteString("\n\n")
-		}
-	}
-
-	// Relationships (only in full)
-	if full {
-		rels, err := conn.FindRelationships(ctx, schema, table)
-		if err == nil && len(rels) > 0 {
-			relRows := make([]map[string]any, len(rels))
-			for i, r := range rels {
-				relRows[i] = map[string]any{
-					"from_column": r.FromColumn,
-					"to_table":    r.ToSchema + "." + r.ToTable,
-					"to_column":   r.ToColumn,
-					"constraint":  r.Name,
-				}
-			}
-			b.WriteString(format.ToTOON("ForeignKeys", relRows))
-			b.WriteString("\n")
-		}
-	}
-
-	return strings.TrimRight(b.String(), "\n"), nil
 }
 
 func (d *Deps) findRelationships(ctx context.Context, args map[string]any) (string, error) {
@@ -418,11 +368,17 @@ func (d *Deps) searchTables(_ context.Context, args map[string]any) (string, err
 	if scope == "" {
 		scope = "all"
 	}
-	limit := 50
-	if v, ok := args["limit"].(float64); ok {
-		limit = int(v)
+	limit := clampInt(numArg(args, "limit", 50), 1, 500)
+	var results []search.Result
+	if boolArg(args, "use_regex", false) {
+		re, err := regexp.Compile("(?i)" + pattern)
+		if err != nil {
+			return "", fmt.Errorf("invalid params: bad regular expression: %v", err)
+		}
+		results = d.Search.SearchRegex(re, scope, limit)
+	} else {
+		results = d.Search.Search(pattern, scope, limit)
 	}
-	results := d.Search.Search(pattern, scope, limit)
 	rows := make([]map[string]any, len(results))
 	for i, r := range results {
 		rows[i] = map[string]any{

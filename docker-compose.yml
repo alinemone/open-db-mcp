@@ -1,6 +1,15 @@
 services:
   mcp:
-    build: .
+    build:
+      context: .
+      args:
+        # Optional, from .env: a proxy for downloading Go modules and Alpine
+        # packages, as reachable from inside the build, e.g.
+        # BUILD_PROXY=http://host.docker.internal:10809
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1
+        BUILD_JOBS: ${BUILD_JOBS:-2}
     image: open-db-mcp:latest
     container_name: open-db-mcp
     restart: unless-stopped

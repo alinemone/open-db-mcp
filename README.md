@@ -206,18 +206,20 @@ The full env reference with every option is in [.env.example](./.env.example).
 **Generic (work on every SQL-like source):**
 
 - `db_list_sources` · `db_list_schemas` · `db_list_tables` · `db_list_columns`
-- `db_table_card` · `db_table_card_full` — columns + stats + sample rows + indexes + FKs
+- `db_table_card` — columns + stats + sample rows + warnings (huge table, timestamps without time zone)
+- `db_table_card_full` — adds primary key, FKs, tables referencing this one, index definitions, ClickHouse engine/keys/CREATE TABLE, heuristic relationships inferred from column names, and query guidance
 - `db_find_relationships` — PK/FK edges
 - `db_execute_query` — read-only SQL, TOON-encoded output
 - `db_execute_write` — mutating SQL (opt-in per source, see below)
-- `search_tables` — fuzzy table/column search across every source
+- `search_tables` — fuzzy table/column search across every source (one-typo tolerant, synonyms via `SEARCH_SYNONYMS`, `use_regex` for regular expressions)
+- Legacy db-mcp aliases: `pg_execute_query`, `db_table_cardfull`
 
 **Per-database:**
 
 - **MongoDB** — `mongo_list_collections`, `mongo_find`, `mongo_aggregate`
 - **Redis** — `redis_keys`, `redis_get`, `redis_info`
-- **Elasticsearch** — `es_list_sources`, `es_list_indices`, `es_field_caps`, `es_search`
-- **CLOG** (opt-in) — `clog_profile`, `clog_container_logs`
+- **Elasticsearch** — `es_list_sources`, `es_list_indices`, `es_resolve_index`, `es_field_caps`, `es_describe_index`, `es_analyze_index`, `es_search`
+- **CLOG** (opt-in) — `clog_profile`, `clog_list_namespaces`, `clog_list_containers`, `clog_find_targets`, `clog_container_logs` (secrets masked), `clog_ingress_metrics`, `clog_ingress_top_routes`
 
 ---
 

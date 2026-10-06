@@ -35,6 +35,9 @@ type CLOGConfig struct {
 	LatencyFlds   []string
 	HostFlds      []string
 	PathFlds      []string
+	PodFlds       []string
+	TimeField     string
+	MessageField  string
 }
 
 // Load reads ServerConfig from the supplied env map.
@@ -57,6 +60,9 @@ func Load(env map[string]string) ServerConfig {
 			LatencyFlds:   splitCSV(env["CLOG_INGRESS_LATENCY_FIELDS"]),
 			HostFlds:      splitCSV(env["CLOG_INGRESS_HOST_FIELDS"]),
 			PathFlds:      splitCSV(env["CLOG_INGRESS_PATH_FIELDS"]),
+			PodFlds:       splitCSV(env["CLOG_POD_FIELDS"]),
+			TimeField:     defaultStr(env["CLOG_TIME_FIELD"], "@timestamp"),
+			MessageField:  defaultStr(env["CLOG_MESSAGE_FIELD"], "message"),
 		},
 	}
 	return c

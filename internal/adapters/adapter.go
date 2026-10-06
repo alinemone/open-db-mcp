@@ -110,6 +110,32 @@ type Conn interface {
 	Close() error
 }
 
+// IndexInfo is one index with its full definition (e.g. CREATE INDEX ...).
+type IndexInfo struct {
+	Name       string
+	Definition string
+}
+
+// TableDetails is the extra, engine-specific description used by
+// db_table_card_full. Fields an engine does not have stay empty.
+type TableDetails struct {
+	PrimaryKey   []string
+	ReferencedBy []Relationship // real FKs in other tables pointing at this one
+	Indexes      []IndexInfo
+
+	// ClickHouse-style engine metadata.
+	Engine       string
+	SortingKey   string
+	PartitionKey string
+	CreateSQL    string
+}
+
+// TableDetailer is optionally implemented by a Conn that can describe keys,
+// inbound references, index definitions or DDL beyond the core Conn methods.
+type TableDetailer interface {
+	TableDetails(ctx context.Context, schema, table string) (TableDetails, error)
+}
+
 // Adapter is the per-database plugin contract.
 //
 // One Adapter instance lives for the lifetime of the process. It is responsible

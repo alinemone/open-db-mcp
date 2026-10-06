@@ -230,6 +230,41 @@ func (c *conn) SampleRows(ctx context.Context, schema, table string, limit int) 
 	return queryToMaps(ctx, c.db, q)
 }
 
+// TableDetails implements adapters.TableDetailer: engine, keys, data-skipping
+// indexes and the CREATE statement.
+func (c *conn) TableDetails(ctx context.Context, schema, table string) (adapters.TableDetails, error) {
+	var td adapters.TableDetails
+	var pk string
+	err := c.db.QueryRowContext(ctx,
+		`SELECT engine, sorting_key, partition_key, primary_key, create_table_query
+FROM system.tables WHERE database = ? AND name = ?`, schema, table).
+		Scan(&td.Engine, &td.SortingKey, &td.PartitionKey, &pk, &td.CreateSQL)
+	if err != nil && err != sql.ErrNoRows {
+		return td, err
+	}
+	if pk != "" {
+		for _, k := range strings.Split(pk, ",") {
+			td.PrimaryKey = append(td.PrimaryKey, strings.TrimSpace(k))
+		}
+	}
+
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT name, concat(type, '(', expr, ') GRANULARITY ', toString(granularity))
+FROM system.data_skipping_indices WHERE database = ? AND table = ? ORDER BY name`, schema, table)
+	if err != nil {
+		return td, nil // skip indexes are optional; older servers lack the table
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ii adapters.IndexInfo
+		if err := rows.Scan(&ii.Name, &ii.Definition); err != nil {
+			return td, err
+		}
+		td.Indexes = append(td.Indexes, ii)
+	}
+	return td, rows.Err()
+}
+
 func (c *conn) FindRelationships(_ context.Context, _, _ string) ([]adapters.Relationship, error) {
 	return nil, adapters.ErrNotSupported
 }

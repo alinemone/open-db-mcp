@@ -303,6 +303,83 @@ func (c *conn) SampleRows(ctx context.Context, schema, table string, limit int) 
 	return out, rows.Err()
 }
 
+const sqlPrimaryKey = `
+SELECT a.attname
+FROM pg_index i
+JOIN pg_class c      ON c.oid = i.indrelid
+JOIN pg_namespace n  ON n.oid = c.relnamespace
+JOIN pg_attribute a  ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+WHERE i.indisprimary AND n.nspname = $1 AND c.relname = $2
+ORDER BY array_position(i.indkey::int2[], a.attnum)`
+
+const sqlReferencedBy = `
+SELECT con.conname, fn.nspname, fc.relname, fa.attname, ta.attname
+FROM pg_constraint con
+JOIN pg_class tc     ON tc.oid = con.confrelid
+JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+JOIN pg_class fc     ON fc.oid = con.conrelid
+JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS k(fromnum, tonum)
+JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = k.fromnum
+JOIN pg_attribute ta ON ta.attrelid = tc.oid AND ta.attnum = k.tonum
+WHERE con.contype = 'f' AND tn.nspname = $1 AND tc.relname = $2
+ORDER BY 2, 3, 1
+LIMIT 200`
+
+const sqlIndexDefs = `
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = $1 AND tablename = $2
+ORDER BY indexname`
+
+// TableDetails implements adapters.TableDetailer.
+func (c *conn) TableDetails(ctx context.Context, schema, table string) (adapters.TableDetails, error) {
+	var td adapters.TableDetails
+
+	pk, err := c.pool.Query(ctx, sqlPrimaryKey, schema, table)
+	if err != nil {
+		return td, sqlError(err)
+	}
+	for pk.Next() {
+		var col string
+		if err := pk.Scan(&col); err != nil {
+			pk.Close()
+			return td, err
+		}
+		td.PrimaryKey = append(td.PrimaryKey, col)
+	}
+	pk.Close()
+
+	refs, err := c.pool.Query(ctx, sqlReferencedBy, schema, table)
+	if err != nil {
+		return td, sqlError(err)
+	}
+	for refs.Next() {
+		var r adapters.Relationship
+		if err := refs.Scan(&r.Name, &r.FromSchema, &r.FromTable, &r.FromColumn, &r.ToColumn); err != nil {
+			refs.Close()
+			return td, err
+		}
+		r.ToSchema, r.ToTable = schema, table
+		td.ReferencedBy = append(td.ReferencedBy, r)
+	}
+	refs.Close()
+
+	idx, err := c.pool.Query(ctx, sqlIndexDefs, schema, table)
+	if err != nil {
+		return td, sqlError(err)
+	}
+	defer idx.Close()
+	for idx.Next() {
+		var ii adapters.IndexInfo
+		if err := idx.Scan(&ii.Name, &ii.Definition); err != nil {
+			return td, err
+		}
+		td.Indexes = append(td.Indexes, ii)
+	}
+	return td, idx.Err()
+}
+
 const sqlFindRelationships = `
 SELECT
   tc.constraint_name,

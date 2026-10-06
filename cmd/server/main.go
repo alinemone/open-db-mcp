@@ -67,6 +67,9 @@ func main() {
 
 	// 2. Wire the MCP server with tools.
 	idx := search.New()
+	// SEARCH_SYNONYMS="vendor:seller|booth;customer:user|buyer" expands
+	// search_tables queries with domain vocabulary.
+	idx.SetSynonyms(search.ParseSynonyms(env["SEARCH_SYNONYMS"]))
 	srv := mcp.New("open-db-mcp", version)
 	deps := &tools.Deps{Sources: sources, Search: idx}
 	tools.RegisterDB(srv, deps)
